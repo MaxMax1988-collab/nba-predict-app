@@ -340,7 +340,6 @@ with tab1:
     with c3:
       st.metric(f"Szansa {matched_away} (Gość)", f"{res['prob_away']*100:.1f}%")
 
-    # WIDOCZNE GOŁYM OKIEM WSKAŹNIKI KOREKT W TLE
     st.markdown("---")
     st.info(
         "🧠 **Autonomiczne korekty wieloczynnikowe dla tego spotkania:**\n\n"
@@ -361,9 +360,9 @@ with tab1:
     if bookmakers:
       outcomes = bookmakers[0].get("markets", [{}])[0].get("outcomes", [])
       for out in outcomes:
-        if out.get("name"] == h_name:
+        if out.get("name") == h_name:
           bookie_h_odds = float(out.get("price", 1.9))
-        elif out.get("name"] == a_name:
+        elif out.get("name") == a_name:
           bookie_a_odds = float(out.get("price", 1.9))
 
     fair_home = round(1 / res["prob_home"], 2)
@@ -449,4 +448,3 @@ with tab3:
     if st.button("Wyczyść cały rejestr"):
       save_json(HISTORY_FILE, [])
       st.rerun()
-    
