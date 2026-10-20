@@ -9,14 +9,14 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🏀 NBA AI Predictor - Faza 1: Fundament Danych")
+st.title("🏀 NBA AI Predictor - Faza 1: Fundament Danych Sezonu")
 
 
 @st.cache_data(ttl=1800)
 def fetch_nba_standings():
-  # Wyznaczenie bieżącego roku i sezonu NBA
   now = datetime.now()
-  season_year = now.year if now.month >= 10 else now.year
+  # Sezon 2026/2027 w API ESPN kodowany jest jako rok zakończenia (2027)
+  season_year = now.year + 1 if now.month >= 10 else now.year
 
   url = f"https://site.api.espn.com/apis/v2/sports/basketball/nba/standings?season={season_year}"
   headers = {"User-Agent": "Mozilla/5.0"}
@@ -45,9 +45,8 @@ def fetch_nba_standings():
         losses = int(get_stat("losses", 0))
         avg_pts_for = round(get_stat("avgPointsFor", 0.0), 1)
         avg_pts_against = round(get_stat("avgPointsAgainst", 0.0), 1)
-
-        win_pct = round(wins / gp, 3) if gp > 0 else 0.0
         net_rating = round(avg_pts_for - avg_pts_against, 2)
+        win_pct = round(wins / gp, 3) if gp > 0 else 0.0
 
         teams_data.append({
             "Drużyna": team_name,
@@ -60,25 +59,37 @@ def fetch_nba_standings():
             "Net Rating": net_rating,
         })
 
-    return pd.DataFrame(teams_data)
+    return pd.DataFrame(teams_data), season_year
   except Exception as e:
     st.error(f"Błąd pobierania danych: {e}")
-    return pd.DataFrame()
+    return pd.DataFrame(), season_year
 
 
-df_standings = fetch_nba_standings()
+df_standings, season_year = fetch_nba_standings()
 
 if not df_standings.empty:
-  # Sortowanie według wygranych i Net Ratingu
+  st.write(f"### Sezon NBA {season_year-1}/{season_year}")
+
+  # Sprawdzenie czy mecze w ogóle się rozpoczęły w nowym sezonie
+  total_games_played = df_standings["Mecze (GP)"].sum()
+
+  if total_games_played == 0:
+    st.info(
+        "ℹ️ Dzisiaj rozpoczyna się nowy sezon zasadniczy NBA! Drużyny mają"
+        " jeszcze 0 rozegranych meczów w nowej tabeli."
+    )
+
+  # Sortujemy według wygranych, a przy braku meczów po nazwie drużyny
   df_standings = df_standings.sort_values(
-      by=["% Wygranych", "Net Rating"], ascending=False
+      by=["% Wygranych", "Net Rating", "Drużyna"], ascending=[False, False, True]
   ).reset_index(drop=True)
 
-  st.subheader("📊 Aktualna Tabela Sezonu")
+  st.subheader("📊 Tabela Ligi")
   st.dataframe(df_standings, use_container_width=True)
 
-  st.subheader("📈 Ranking Siły (Net Rating)")
-  st.bar_chart(df_standings.set_index("Drużyna")["Net Rating"])
+  if total_games_played > 0:
+    st.subheader("📈 Ranking Siły (Net Rating)")
+    st.bar_chart(df_standings.set_index("Drużyna")["Net Rating"])
 else:
-  st.warning("Trwa pobieranie danych lub dane są niedostępne.")
+  st.warning("Trwa pobieranie danych lub brak połączenia z API.")
     
