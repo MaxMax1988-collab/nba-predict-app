@@ -6,13 +6,13 @@ import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="NBA Fully Autonomous Evolving Predictor",
+    page_title="NBA Multi-Factor Autonomous Predictor",
     page_icon="🏀",
     layout="wide",
 )
 
 HISTORY_FILE = "bet_history.json"
-ERROR_LOG_FILE = "model_errors.json"
+ERROR_LOG_FILE = "model_errors_multi.json"
 PROCESSED_GAMES_FILE = "processed_games.json"
 
 HISTORICAL_POWER_RATINGS = {
@@ -64,7 +64,7 @@ def save_json(filename, data):
     json.dump(data, f)
 
 
-# AUTOMATYCZNA PĘTLA UCZENIA SIĘ NA ZAKOŃCZONYCH MECZACH Z ESPN
+# AUTONOMICZNA PĘTLA WIELOCZYNNIKOWA (ATAK + OBRONA)
 def run_autonomous_learning(teams_dict):
   today_str = datetime.now().strftime("%Y%m%d")
   url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={today_str}"
@@ -103,15 +103,33 @@ def run_autonomous_learning(teams_dict):
                 a_score = score
 
             if h_team and a_team and h_team in teams_dict and a_team in teams_dict:
-              actual_diff = h_score - a_score
-              # Korekta siły w tle na podstawie błędu wynikowego (płynne uczenie resztkowe)
-              error_correction = (h_score - a_score) * 0.05
-              error_logs[h_team] = (
-                  error_logs.get(h_team, 0.0) + error_correction * 0.1
-              )
-              error_logs[a_team] = (
-                  error_logs.get(a_team, 0.0) - error_correction * 0.1
-              )
+              # Inicjalizacja słownika dla drużyn, jeśli brak
+              if h_team not in error_logs:
+                error_logs[h_team] = {"off_corr": 0.0, "def_corr": 0.0}
+              if a_team not in error_logs:
+                error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
+
+              # 1. Czynnik Ataku (czy drużyna rzuciła więcej/mniej niż średnia)
+              h_expected_off = teams_dict[h_team]["AVG_PTS_FOR"]
+              a_expected_off = teams_dict[a_team]["AVG_PTS_FOR"]
+
+              h_off_err = (h_score - h_expected_off) * 0.05
+              a_off_err = (a_score - a_expected_off) * 0.05
+
+              # 2. Czynnik Obrony (czy drużyna straciła więcej/mniej niż średnia)
+              h_expected_def = teams_dict[h_team]["AVG_PTS_AGAINST"]
+              a_expected_def = teams_dict[a_team]["AVG_PTS_AGAINST"]
+
+              # Jeśli gospodarz stracił dużo (a_score > h_expected_def), to obrona zagrała gorzej
+              h_def_err = (a_score - h_expected_def) * 0.05
+              a_def_err = (h_score - a_expected_def) * 0.05
+
+              # Aktualizacja wag z tłumieniem (learning rate 0.1)
+              error_logs[h_team]["off_corr"] += h_off_err * 0.1
+              error_logs[h_team]["def_corr"] += h_def_err * 0.1
+
+              error_logs[a_team]["off_corr"] += a_off_err * 0.1
+              error_logs[a_team]["def_corr"] += a_def_err * 0.1
 
               processed_games.append(game_id)
               updated = True
@@ -136,6 +154,8 @@ def fetch_nba_standings():
     res.raise_for_status()
     data = res.json()
 
+    error_logs = load_json(ERROR_LOG_FILE, {})
+
     for children in data.get("children", []):
       for entry in children.get("standings", {}).get("entries", []):
         team_info = entry.get("team", {})
@@ -158,11 +178,19 @@ def fetch_nba_standings():
         if avg_pts_against == 0.0:
           avg_pts_against = 112.0
 
-        net_rating = round(avg_pts_for - avg_pts_against, 2)
         base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
 
-        error_logs = load_json(ERROR_LOG_FILE, {})
-        team_correction = error_logs.get(team_name, 0.0)
+        # Pobieranie wieloczynnikowych korekt z błędu resztkowego w tle
+        team_errs = error_logs.get(
+            team_name, {"off_corr": 0.0, "def_corr": 0.0}
+        )
+        off_corr = team_errs.get("off_corr", 0.0)
+        def_corr = team_errs.get("def_corr", 0.0)
+
+        # Dynamicznie skorygowane statystyki ataku i obrony
+        adjusted_pts_for = round(avg_pts_for + off_corr, 1)
+        adjusted_pts_against = round(avg_pts_against + def_corr, 1)
+        net_rating = round(adjusted_pts_for - adjusted_pts_against, 2)
 
         history_weight = round(max(0.1, 1.0 - (gp * 0.05)), 2)
 
@@ -171,13 +199,13 @@ def fetch_nba_standings():
             "GP": gp,
             "W": wins,
             "L": losses,
-            "AVG_PTS_FOR": round(avg_pts_for, 1),
-            "AVG_PTS_AGAINST": round(avg_pts_against, 1),
+            "AVG_PTS_FOR": adjusted_pts_for,
+            "AVG_PTS_AGAINST": adjusted_pts_against,
             "NET_RATING": net_rating,
             "HISTORY_WGT": history_weight,
-            "TOTAL_POWER": round(
-                (base_power + team_correction) * history_weight, 2
-            ),
+            "TOTAL_POWER": round(base_power * history_weight, 2),
+            "OFF_CORR": round(off_corr, 2),
+            "DEF_CORR": round(def_corr, 2),
         }
 
     run_autonomous_learning(teams_dict)
@@ -239,7 +267,7 @@ def predict_matchup(home_team, away_team):
   }
 
 
-st.title("🏀 Autonomous Self-Evolving NBA Predictor")
+st.title("🏀 Multi-Factor Autonomous NBA Predictor")
 
 teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
@@ -248,13 +276,13 @@ bet_history = load_json(HISTORY_FILE, [])
 
 tab1, tab2, tab3 = st.tabs([
     "🏀 Terminarz & Value Bets",
-    "📊 Tabela Ligi & Autonomiczne Wagi",
+    "📊 Tabela Ligi & Czynniki (Atak/Obrona)",
     "📈 Rejestr Typów & ROI",
 ])
 
 with tab1:
   st.subheader(
-      "Nadchodzące mecze (Model uczy się samoczynnie w tle po każdej kolejce)"
+      "Nadchodzące mecze (Model uczy się niezależnie ataku i obrony w tle)"
   )
 
   if not live_odds_data:
@@ -391,7 +419,7 @@ with tab1:
 
 with tab2:
   st.subheader(
-      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Autonomiczne Wagi)"
+      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowy Model)"
   )
   if teams_dict:
     df = pd.DataFrame(list(teams_dict.values()))
@@ -417,4 +445,4 @@ with tab3:
     if st.button("Wyczyść cały rejestr"):
       save_json(HISTORY_FILE, [])
       st.rerun()
-            
+          
