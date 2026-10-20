@@ -14,7 +14,6 @@ st.set_page_config(
 HISTORY_FILE = "bet_history.json"
 ERROR_LOG_FILE = "model_errors.json"
 
-# Stonowane bazowe współczynniki siły historycznej na start
 HISTORICAL_POWER_RATINGS = {
     "Boston Celtics": 4.5,
     "Oklahoma City Thunder": 4.0,
@@ -64,7 +63,6 @@ def save_json(filename, data):
     json.dump(data, f)
 
 
-# 1. POBIERANIE DANYCH Z ESPN Z UWZGLĘDNIENIEM ROZEGRANYCH MECZÓW
 @st.cache_data(ttl=1800)
 def fetch_nba_standings():
   now = datetime.now()
@@ -103,9 +101,11 @@ def fetch_nba_standings():
         net_rating = round(avg_pts_for - avg_pts_against, 2)
         base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
 
-        # Dynamiczna korekta błędów modelu zapisana w tle
         error_logs = load_json(ERROR_LOG_FILE, {})
         team_correction = error_logs.get(team_name, 0.0)
+
+        # Waga historii maleje wraz z rozegranymi meczami GP
+        history_weight = round(max(0.1, 1.0 - (gp * 0.05)), 2)
 
         teams_dict[team_name] = {
             "TEAM_NAME": team_name,
@@ -115,7 +115,10 @@ def fetch_nba_standings():
             "AVG_PTS_FOR": round(avg_pts_for, 1),
             "AVG_PTS_AGAINST": round(avg_pts_against, 1),
             "NET_RATING": net_rating,
-            "BASE_POWER": base_power + team_correction,
+            "HISTORY_WGT": history_weight,
+            "TOTAL_POWER": round(
+                (base_power + team_correction) * history_weight, 2
+            ),
         }
     return teams_dict, season_year
   except Exception as e:
@@ -123,7 +126,6 @@ def fetch_nba_standings():
     return {}, season_year
 
 
-# 2. POBIERANIE KURSÓW Z THE ODDS API
 @st.cache_data(ttl=600)
 def fetch_live_odds(api_key):
   url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h&oddsFormat=decimal"
@@ -137,26 +139,14 @@ def fetch_live_odds(api_key):
     return []
 
 
-# 3. EWOLUUJĄCY MODEL PREDYKCJI (DYNAMICZNE WAGI)
 def predict_matchup(home_team, away_team):
-  h_gp = home_team["GP"]
-  a_gp = away_team["GP"]
-
-  # Im więcej meczów rozegranych w sezonie, tym mniejsza waga sztywnej bazy historycznej
-  # (płynne przejście z power ratingu na realne statystyki bieżące)
-  weight_history_h = max(0.1, 1.0 - (h_gp * 0.05))
-  weight_history_a = max(0.1, 1.0 - (a_gp * 0.05))
-
   h_off = home_team["AVG_PTS_FOR"]
   h_def = home_team["AVG_PTS_AGAINST"]
   a_off = away_team["AVG_PTS_FOR"]
   a_def = away_team["AVG_PTS_AGAINST"]
 
   net_diff = home_team["NET_RATING"] - away_team["NET_RATING"]
-  power_diff = (home_team["BASE_POWER"] * weight_history_h) - (
-      away_team["BASE_POWER"] * weight_history_a
-  )
-
+  power_diff = home_team["TOTAL_POWER"] - away_team["TOTAL_POWER"]
   home_advantage = 3.0
 
   expected_home_pts = (
@@ -173,11 +163,9 @@ def predict_matchup(home_team, away_team):
   )
 
   expected_diff = expected_home_pts - expected_away_pts
-
   prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
   prob_home = max(0.12, min(0.88, prob_home))
   prob_away = 1 - prob_home
-
   handicap = -round(expected_diff * 2) / 2
 
   return {
@@ -189,7 +177,6 @@ def predict_matchup(home_team, away_team):
   }
 
 
-# 4. INTERFEJS
 st.title("🏀 NBA Self-Evolving Predictor & The Odds API")
 
 teams_dict, season_year = fetch_nba_standings()
@@ -199,13 +186,13 @@ bet_history = load_json(HISTORY_FILE, [])
 
 tab1, tab2, tab3 = st.tabs([
     "🏀 Terminarz & Value Bets",
-    "📊 Tabela Ligi & Statystyki",
+    "📊 Tabela Ligi & Wskaźniki Modelu",
     "📈 Rejestr Typów, Błędy & ROI",
 ])
 
 with tab1:
   st.subheader(
-      "Nadchodzące mecze (Predykcje ewoluują wraz z rozegranymi kolejkami)"
+      "Nadchodzące mecze (Wagi modelu dostosowują się w czasie rzeczywistym)"
   )
 
   if not live_odds_data:
@@ -346,7 +333,7 @@ with tab1:
 
 with tab2:
   st.subheader(
-      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Czysty Start)"
+      f"📊 Tabela Ligi & Dynamiczne Wskaźniki Siły ({season_year-1}/{season_year})"
   )
   if teams_dict:
     df = pd.DataFrame(list(teams_dict.values()))
@@ -354,14 +341,14 @@ with tab2:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-  st.subheader("📈 Rejestr Typów, Analiza Błędów & ROI")
+  st.subheader("📈 Rejestr Typów, Ewolucja Błędów & ROI")
   if not bet_history:
     st.info("Brak zapisanych typów w rejestrze.")
   else:
     df_bets = pd.DataFrame(bet_history)
     st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-    st.write("### Zarządzaj statusami zakładów i ucz model na błędach")
+    st.write("### Zarządzaj statusami zakładów i napędzaj ewolucję wagi modelu")
     error_logs = load_json(ERROR_LOG_FILE, {})
 
     for i, bet in enumerate(bet_history):
@@ -387,12 +374,10 @@ with tab3:
           bet_history[i]["status"] = new_status
           save_json(HISTORY_FILE, bet_history)
 
-          # Informacja zwrotna dla modelu (feedback loop na błędach)
           h_t = bet.get("home_team")
           a_t = bet.get("away_team")
           if h_t and a_t:
             if new_status == "Przegrany" and old_status == "Oczekujący":
-              # Jeśli typ przegrał, model koryguje wagi drużyn w tle
               if bet["pick"] == h_t:
                 error_logs[h_t] = error_logs.get(h_t, 0.0) - 0.2
                 error_logs[a_t] = error_logs.get(a_t, 0.0) + 0.2
@@ -414,3 +399,4 @@ with tab3:
       save_json(HISTORY_FILE, [])
       save_json(ERROR_LOG_FILE, {})
       st.rerun()
+          
