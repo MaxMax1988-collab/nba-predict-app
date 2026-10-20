@@ -64,7 +64,6 @@ def save_json(filename, data):
     json.dump(data, f)
 
 
-# AUTONOMICZNA PĘTLA WIELOCZYNNIKOWA (ATAK + OBRONA)
 def run_autonomous_learning(teams_dict):
   today_str = datetime.now().strftime("%Y%m%d")
   url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={today_str}"
@@ -103,28 +102,23 @@ def run_autonomous_learning(teams_dict):
                 a_score = score
 
             if h_team and a_team and h_team in teams_dict and a_team in teams_dict:
-              # Inicjalizacja słownika dla drużyn, jeśli brak
               if h_team not in error_logs:
                 error_logs[h_team] = {"off_corr": 0.0, "def_corr": 0.0}
               if a_team not in error_logs:
                 error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
-              # 1. Czynnik Ataku (czy drużyna rzuciła więcej/mniej niż średnia)
               h_expected_off = teams_dict[h_team]["AVG_PTS_FOR"]
               a_expected_off = teams_dict[a_team]["AVG_PTS_FOR"]
 
               h_off_err = (h_score - h_expected_off) * 0.05
               a_off_err = (a_score - a_expected_off) * 0.05
 
-              # 2. Czynnik Obrony (czy drużyna straciła więcej/mniej niż średnia)
               h_expected_def = teams_dict[h_team]["AVG_PTS_AGAINST"]
               a_expected_def = teams_dict[a_team]["AVG_PTS_AGAINST"]
 
-              # Jeśli gospodarz stracił dużo (a_score > h_expected_def), to obrona zagrała gorzej
               h_def_err = (a_score - h_expected_def) * 0.05
               a_def_err = (h_score - a_expected_def) * 0.05
 
-              # Aktualizacja wag z tłumieniem (learning rate 0.1)
               error_logs[h_team]["off_corr"] += h_off_err * 0.1
               error_logs[h_team]["def_corr"] += h_def_err * 0.1
 
@@ -180,14 +174,12 @@ def fetch_nba_standings():
 
         base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
 
-        # Pobieranie wieloczynnikowych korekt z błędu resztkowego w tle
         team_errs = error_logs.get(
             team_name, {"off_corr": 0.0, "def_corr": 0.0}
         )
         off_corr = team_errs.get("off_corr", 0.0)
         def_corr = team_errs.get("def_corr", 0.0)
 
-        # Dynamicznie skorygowane statystyki ataku i obrony
         adjusted_pts_for = round(avg_pts_for + off_corr, 1)
         adjusted_pts_against = round(avg_pts_against + def_corr, 1)
         net_rating = round(adjusted_pts_for - adjusted_pts_against, 2)
@@ -202,10 +194,9 @@ def fetch_nba_standings():
             "AVG_PTS_FOR": adjusted_pts_for,
             "AVG_PTS_AGAINST": adjusted_pts_against,
             "NET_RATING": net_rating,
-            "HISTORY_WGT": history_weight,
-            "TOTAL_POWER": round(base_power * history_weight, 2),
             "OFF_CORR": round(off_corr, 2),
             "DEF_CORR": round(def_corr, 2),
+            "TOTAL_POWER": round(base_power * history_weight, 2),
         }
 
     run_autonomous_learning(teams_dict)
@@ -282,7 +273,7 @@ tab1, tab2, tab3 = st.tabs([
 
 with tab1:
   st.subheader(
-      "Nadchodzące mecze (Model uczy się niezależnie ataku i obrony w tle)"
+      "Nadchodzące mecze (Wieloczynnikowe samouczenie modelu w tle)"
   )
 
   if not live_odds_data:
@@ -349,6 +340,18 @@ with tab1:
     with c3:
       st.metric(f"Szansa {matched_away} (Gość)", f"{res['prob_away']*100:.1f}%")
 
+    # WIDOCZNE GOŁYM OKIEM WSKAŹNIKI KOREKT W TLE
+    st.markdown("---")
+    st.info(
+        "🧠 **Autonomiczne korekty wieloczynnikowe dla tego spotkania:**\n\n"
+        f"• **{matched_home}:** Korekta Ataku (OFF):"
+        f" `{teams_dict[matched_home]['OFF_CORR']:+.2f}` | Korekta Obrony (DEF):"
+        f" `{teams_dict[matched_home]['DEF_CORR']:+.2f}`\n"
+        f"• **{matched_away}:** Korekta Ataku (OFF):"
+        f" `{teams_dict[matched_away]['OFF_CORR']:+.2f}` | Korekta Obrony (DEF):"
+        f" `{teams_dict[matched_away]['DEF_CORR']:+.2f}`"
+    )
+
     st.markdown("---")
     st.subheader("🎯 Kalkulator Value Betów (Kursy Bukmacherskie)")
 
@@ -358,9 +361,9 @@ with tab1:
     if bookmakers:
       outcomes = bookmakers[0].get("markets", [{}])[0].get("outcomes", [])
       for out in outcomes:
-        if out.get("name") == h_name:
+        if out.get("name"] == h_name:
           bookie_h_odds = float(out.get("price", 1.9))
-        elif out.get("name") == a_name:
+        elif out.get("name"] == a_name:
           bookie_a_odds = float(out.get("price", 1.9))
 
     fair_home = round(1 / res["prob_home"], 2)
@@ -419,7 +422,8 @@ with tab1:
 
 with tab2:
   st.subheader(
-      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowy Model)"
+      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowe Korekty"
+      " Ataku i Obrony)"
   )
   if teams_dict:
     df = pd.DataFrame(list(teams_dict.values()))
@@ -445,4 +449,4 @@ with tab3:
     if st.button("Wyczyść cały rejestr"):
       save_json(HISTORY_FILE, [])
       st.rerun()
-          
+    
