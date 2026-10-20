@@ -6,46 +6,45 @@ import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="NBA Advanced Predictor & Value Bets",
+    page_title="NBA Balanced Predictor & Value Bets",
     page_icon="🏀",
     layout="wide",
 )
 
 HISTORY_FILE = "bet_history.json"
 
-# Wstępne historyczne współczynniki siły (Power Rating) na start nowego sezonu 2026/2027
-# Oparte na realnych wynikach z poprzedniego sezonu, żeby silne ekipy nie miały remisowych szans ze słabymi.
+# Bardziej stonowane współczynniki siły historycznej (Power Rating) na start sezonu
 HISTORICAL_POWER_RATINGS = {
-    "Boston Celtics": 7.5,
-    "Oklahoma City Thunder": 7.0,
-    "Denver Nuggets": 6.0,
-    "New York Knicks": 5.5,
-    "Minnesota Timberwolves": 5.0,
-    "Dallas Mavericks": 5.0,
-    "Milwaukee Bucks": 4.5,
-    "Philadelphia 76ers": 4.5,
-    "Cleveland Cavaliers": 3.5,
-    "Indiana Pacers": 3.0,
-    "Orlando Magic": 2.5,
-    "Los Angeles Lakers": 2.5,
-    "Phoenix Suns": 2.0,
-    "Golden State Warriors": 2.0,
-    "Los Angeles Clippers": 2.0,
-    "Memphis Grizzlies": 1.5,
-    "Sacramento Kings": 1.0,
-    "Miami Heat": 1.0,
-    "New Orleans Pelicans": 0.5,
-    "San Antonio Spurs": 0.0,
+    "Boston Celtics": 4.5,
+    "Oklahoma City Thunder": 4.0,
+    "Denver Nuggets": 3.5,
+    "New York Knicks": 3.0,
+    "Minnesota Timberwolves": 3.0,
+    "Dallas Mavericks": 3.0,
+    "Milwaukee Bucks": 2.5,
+    "Philadelphia 76ers": 2.5,
+    "Cleveland Cavaliers": 2.0,
+    "Indiana Pacers": 1.5,
+    "Orlando Magic": 1.5,
+    "Los Angeles Lakers": 1.5,
+    "Phoenix Suns": 1.0,
+    "Golden State Warriors": 1.0,
+    "Los Angeles Clippers": 1.0,
+    "Memphis Grizzlies": 0.5,
+    "Sacramento Kings": 0.5,
+    "Miami Heat": 0.5,
+    "New Orleans Pelicans": 0.0,
+    "San Antonio Spurs": -0.5,
     "Chicago Bulls": -1.0,
     "Houston Rockets": -1.0,
     "Atlanta Hawks": -1.5,
-    "Toronto Raptors": -2.0,
-    "Utah Jazz": -3.0,
-    "Brooklyn Nets": -3.5,
-    "Charlotte Hornets": -4.0,
-    "Portland Trail Blazers": -4.5,
-    "Detroit Pistons": -5.0,
-    "Washington Wizards": -6.0,
+    "Toronto Raptors": -1.5,
+    "Utah Jazz": -2.0,
+    "Brooklyn Nets": -2.5,
+    "Charlotte Hornets": -3.0,
+    "Portland Trail Blazers": -3.0,
+    "Detroit Pistons": -3.5,
+    "Washington Wizards": -4.0,
 }
 
 
@@ -101,8 +100,6 @@ def fetch_nba_standings():
           avg_pts_against = 112.0
 
         net_rating = round(avg_pts_for - avg_pts_against, 2)
-
-        # Pobieramy bazową siłę historyczną (jeśli brak w słowniku, domyślnie 0.0)
         base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
 
         teams_dict[team_name] = {
@@ -121,7 +118,7 @@ def fetch_nba_standings():
     return {}, season_year
 
 
-# 2. POBIERANJE KURSÓW Z THE ODDS API
+# 2. POBIERANIE KURSÓW Z THE ODDS API
 @st.cache_data(ttl=600)
 def fetch_live_odds(api_key):
   url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h&oddsFormat=decimal"
@@ -135,32 +132,42 @@ def fetch_live_odds(api_key):
     return []
 
 
-# 3. ROZBUDOWANY WIELOCZYNNIKOWY MODEL PREDYKCJI
+# 3. ZBALANSOWANY MODEL PREDYKCJI
 def predict_matchup(home_team, away_team):
   h_off = home_team["AVG_PTS_FOR"]
   h_def = home_team["AVG_PTS_AGAINST"]
   a_off = away_team["AVG_PTS_FOR"]
   a_def = away_team["AVG_PTS_AGAINST"]
 
-  # Czynniki statystyczne i historyczne siły
   net_diff = home_team["NET_RATING"] - away_team["NET_RATING"]
   power_diff = home_team["BASE_POWER"] - away_team["BASE_POWER"]
 
-  # Przewaga własnego parkietu (~3.0 punkty)
+  # Standardowa przewaga własnego parkietu w NBA (~3.0 punkty)
   home_advantage = 3.0
 
-  # Zaawansowane szacowanie punktów z uwzględnieniem bazy historycznej siły
+  # Stonowane szacowanie punktów
   expected_home_pts = (
-      (h_off + a_def) / 2 + (net_diff / 4) + (power_diff / 2) + (home_advantage / 2)
+      (h_off + a_def) / 2
+      + (net_diff / 5)
+      + (power_diff / 3)
+      + (home_advantage / 2)
   )
   expected_away_pts = (
-      (a_off + h_def) / 2 - (net_diff / 4) - (power_diff / 2) - (home_advantage / 2)
+      (a_off + h_def) / 2
+      - (net_diff / 5)
+      - (power_diff / 3)
+      - (home_advantage / 2)
   )
 
   expected_diff = expected_home_pts - expected_away_pts
 
-  prob_home = 1 / (1 + 10 ** (-expected_diff / 10.0))
+  # Zwiększony dzielnik (16.0) spłaszcza krzywą i zapobiega skrajnościom procentowym
+  prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
+
+  # Bezpieczny clamp (ograniczenie) szans w granicach realiów NBA (od 12% do 88%)
+  prob_home = max(0.12, min(0.88, prob_home))
   prob_away = 1 - prob_home
+
   handicap = -round(expected_diff * 2) / 2
 
   return {
@@ -173,9 +180,8 @@ def predict_matchup(home_team, away_team):
 
 
 # 4. INTERFEJS
-st.title("🏀 NBA Multi-Factor Predictor & The Odds API")
+st.title("🏀 NBA Balanced Predictor & The Odds API")
 
-# Pobieranie danych
 teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
@@ -191,10 +197,7 @@ with tab1:
   st.subheader("Nadchodzące mecze i automatyczne kursy (The Odds API)")
 
   if not live_odds_data:
-    st.info(
-        "Brak meczów w Odds API na tę godzinę. Wybierz drużyny ręcznie z bazy"
-        " ESPN:"
-    )
+    st.info("Brak meczów w Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
     all_teams = sorted(list(teams_dict.keys()))
     if all_teams:
       c1, c2 = st.columns(2)
@@ -216,7 +219,6 @@ with tab1:
             f" {manual_away} (Gość): {res['prob_away']*100:.1f}%"
         )
   else:
-    # Filtrujemy i pokazujemy czytelne etykiety z datą meczu z Odds API
     match_labels = []
     for m in live_odds_data:
       commence_time = m.get("commence_time", "")[:16].replace("T", " ")
@@ -233,7 +235,6 @@ with tab1:
     h_name = match_info["home_team"]
     a_name = match_info["away_team"]
 
-    # Inteligentne dopasowanie nazw z Odds API do bazy ESPN
     matched_home, matched_away = None, None
     for t_name in teams_dict.keys():
       if h_name.lower() in t_name.lower() or t_name.lower() in h_name.lower():
@@ -334,7 +335,6 @@ with tab2:
   if teams_dict:
     df = pd.DataFrame(list(teams_dict.values()))
     df = df.sort_values(by="TEAM_NAME").reset_index(drop=True)
-    # Poprawka wyświetlania tabeli, żeby nazwy drużyn i kolumny były w pełni widoczne
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
