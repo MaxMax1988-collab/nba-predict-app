@@ -6,13 +6,14 @@ import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="NBA Evolving Predictor & Value Bets",
+    page_title="NBA Fully Autonomous Evolving Predictor",
     page_icon="🏀",
     layout="wide",
 )
 
 HISTORY_FILE = "bet_history.json"
 ERROR_LOG_FILE = "model_errors.json"
+PROCESSED_GAMES_FILE = "processed_games.json"
 
 HISTORICAL_POWER_RATINGS = {
     "Boston Celtics": 4.5,
@@ -63,6 +64,68 @@ def save_json(filename, data):
     json.dump(data, f)
 
 
+# AUTOMATYCZNA PĘTLA UCZENIA SIĘ NA ZAKOŃCZONYCH MECZACH Z ESPN
+def run_autonomous_learning(teams_dict):
+  today_str = datetime.now().strftime("%Y%m%d")
+  url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={today_str}"
+  headers = {"User-Agent": "Mozilla/5.0"}
+
+  processed_games = load_json(PROCESSED_GAMES_FILE, [])
+  error_logs = load_json(ERROR_LOG_FILE, {})
+  updated = False
+
+  try:
+    res = requests.get(url, headers=headers, timeout=5)
+    if res.status_code == 200:
+      data = res.json()
+      events = data.get("events", [])
+      for event in events:
+        game_id = event.get("id")
+        status_type = (
+            event.get("status", {}).get("type", {}).get("completed", False)
+        )
+
+        if status_type and game_id not in processed_games:
+          competitions = event.get("competitions", [])
+          if competitions:
+            comp = competitions[0]
+            competitors = comp.get("competitors", [])
+            h_team, a_team, h_score, a_score = None, None, 0, 0
+
+            for comp_det in competitors:
+              t_name = comp_det.get("team", {}).get("displayName", "")
+              score = int(comp_det.get("score", 0))
+              if comp_det.get("homeAway") == "home":
+                h_team = t_name
+                h_score = score
+              else:
+                a_team = t_name
+                a_score = score
+
+            if h_team and a_team and h_team in teams_dict and a_team in teams_dict:
+              # Model uczy się automatycznie na błędach różnicy punktowej
+              actual_diff = h_score - a_score
+              # Korekta siły w tle na podstawie błędu wynikowego
+              error_correction = (
+                  h_score - a_score
+              ) * 0.05  płynne uczenie resztkowe
+              error_logs[h_team] = (
+                  error_logs.get(h_team, 0.0) + error_correction * 0.1
+              )
+              error_logs[a_team] = (
+                  error_logs.get(a_team, 0.0) - error_correction * 0.1
+              )
+
+              processed_games.append(game_id)
+              updated = True
+
+      if updated:
+        save_json(ERROR_LOG_FILE, error_logs)
+        save_json(PROCESSED_GAMES_FILE, processed_games)
+  except Exception as e:
+    pass
+
+
 @st.cache_data(ttl=1800)
 def fetch_nba_standings():
   now = datetime.now()
@@ -104,7 +167,6 @@ def fetch_nba_standings():
         error_logs = load_json(ERROR_LOG_FILE, {})
         team_correction = error_logs.get(team_name, 0.0)
 
-        # Waga historii maleje wraz z rozegranymi meczami GP
         history_weight = round(max(0.1, 1.0 - (gp * 0.05)), 2)
 
         teams_dict[team_name] = {
@@ -120,6 +182,10 @@ def fetch_nba_standings():
                 (base_power + team_correction) * history_weight, 2
             ),
         }
+
+    # Uruchomienie automatycznej pętli uczenia w tle
+    run_autonomous_learning(teams_dict)
+
     return teams_dict, season_year
   except Exception as e:
     st.error(f"Błąd pobierania danych: {e}")
@@ -177,7 +243,7 @@ def predict_matchup(home_team, away_team):
   }
 
 
-st.title("🏀 NBA Self-Evolving Predictor & The Odds API")
+st.title("🏀 Autonomous Self-Evolving NBA Predictor")
 
 teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
@@ -186,13 +252,13 @@ bet_history = load_json(HISTORY_FILE, [])
 
 tab1, tab2, tab3 = st.tabs([
     "🏀 Terminarz & Value Bets",
-    "📊 Tabela Ligi & Wskaźniki Modelu",
-    "📈 Rejestr Typów, Błędy & ROI",
+    "📊 Tabela Ligi & Autonomiczne Wagi",
+    "📈 Rejestr Typów & ROI",
 ])
 
 with tab1:
   st.subheader(
-      "Nadchodzące mecze (Wagi modelu dostosowują się w czasie rzeczywistym)"
+      "Nadchodzące mecze (Model uczy się samoczynnie w tle po każdej kolejce)"
   )
 
   if not live_odds_data:
@@ -295,8 +361,6 @@ with tab1:
           bet_history.append({
               "date": datetime.now().strftime("%Y-%m-%d"),
               "match": f"{matched_away} @ {matched_home}",
-              "home_team": matched_home,
-              "away_team": matched_away,
               "pick": matched_home,
               "odds": bookie_h_odds,
               "status": "Oczekujący",
@@ -322,8 +386,6 @@ with tab1:
           bet_history.append({
               "date": datetime.now().strftime("%Y-%m-%d"),
               "match": f"{matched_away} @ {matched_home}",
-              "home_team": matched_home,
-              "away_team": matched_away,
               "pick": matched_away,
               "odds": bookie_a_odds,
               "status": "Oczekujący",
@@ -333,7 +395,7 @@ with tab1:
 
 with tab2:
   st.subheader(
-      f"📊 Tabela Ligi & Dynamiczne Wskaźniki Siły ({season_year-1}/{season_year})"
+      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Autonomiczne Wagi)"
   )
   if teams_dict:
     df = pd.DataFrame(list(teams_dict.values()))
@@ -341,51 +403,12 @@ with tab2:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-  st.subheader("📈 Rejestr Typów, Ewolucja Błędów & ROI")
+  st.subheader("📈 Rejestr Typów i Skuteczność (ROI)")
   if not bet_history:
     st.info("Brak zapisanych typów w rejestrze.")
   else:
     df_bets = pd.DataFrame(bet_history)
     st.dataframe(df_bets, use_container_width=True, hide_index=True)
-
-    st.write("### Zarządzaj statusami zakładów i napędzaj ewolucję wagi modelu")
-    error_logs = load_json(ERROR_LOG_FILE, {})
-
-    for i, bet in enumerate(bet_history):
-      col_s1, col_s2 = st.columns([3, 2])
-      with col_s1:
-        st.text(
-            f"{bet['date']} | {bet['match']} | Typ: {bet['pick']} | Kurs:"
-            f" {bet['odds']}"
-        )
-      with col_s2:
-        new_status = st.selectbox(
-            f"Status #{i}",
-            ["Oczekujący", "Wygrany", "Przegrany"],
-            index=(
-                0
-                if bet["status"] == "Oczekujący"
-                else (1 if bet["status"] == "Wygrany" else 2)
-            ),
-            key=f"status_{i}",
-        )
-        if new_status != bet["status"]:
-          old_status = bet["status"]
-          bet_history[i]["status"] = new_status
-          save_json(HISTORY_FILE, bet_history)
-
-          h_t = bet.get("home_team")
-          a_t = bet.get("away_team")
-          if h_t and a_t:
-            if new_status == "Przegrany" and old_status == "Oczekujący":
-              if bet["pick"] == h_t:
-                error_logs[h_t] = error_logs.get(h_t, 0.0) - 0.2
-                error_logs[a_t] = error_logs.get(a_t, 0.0) + 0.2
-              else:
-                error_logs[a_t] = error_logs.get(a_t, 0.0) - 0.2
-                error_logs[h_t] = error_logs.get(h_t, 0.0) + 0.2
-              save_json(ERROR_LOG_FILE, error_logs)
-          st.rerun()
 
     settled = [b for b in bet_history if b["status"] != "Oczekujący"]
     if settled:
@@ -395,8 +418,7 @@ with tab3:
       st.metric("Skuteczność (Win Rate)", f"{win_rate:.1f}%")
       st.metric("ROI", f"{roi:+.2f}%")
 
-    if st.button("Wyczyść cały rejestr i resetuj błędy"):
+    if st.button("Wyczyść cały rejestr"):
       save_json(HISTORY_FILE, [])
-      save_json(ERROR_LOG_FILE, {})
       st.rerun()
           
