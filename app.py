@@ -103,12 +103,9 @@ def run_autonomous_learning(teams_dict):
                 a_score = score
 
             if h_team and a_team and h_team in teams_dict and a_team in teams_dict:
-              # Model uczy się automatycznie na błędach różnicy punktowej
               actual_diff = h_score - a_score
-              # Korekta siły w tle na podstawie błędu wynikowego
-              error_correction = (
-                  h_score - a_score
-              ) * 0.05  płynne uczenie resztkowe
+              # Korekta siły w tle na podstawie błędu wynikowego (płynne uczenie resztkowe)
+              error_correction = (h_score - a_score) * 0.05
               error_logs[h_team] = (
                   error_logs.get(h_team, 0.0) + error_correction * 0.1
               )
@@ -183,7 +180,6 @@ def fetch_nba_standings():
             ),
         }
 
-    # Uruchomienie automatycznej pętli uczenia w tle
     run_autonomous_learning(teams_dict)
 
     return teams_dict, season_year
@@ -421,4 +417,4 @@ with tab3:
     if st.button("Wyczyść cały rejestr"):
       save_json(HISTORY_FILE, [])
       st.rerun()
-          
+            
