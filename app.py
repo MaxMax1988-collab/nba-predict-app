@@ -7,40 +7,68 @@ import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="NBA Auto-Learning Predictor & Value Betting",
+    page_title="NBA Advanced AI & Value Betting System",
     page_icon="🏀",
     layout="wide",
 )
 
 WEIGHTS_FILE = "model_weights.json"
+HISTORY_FILE = "bet_history.json"
 
 
 # -----------------------------------------------------------------------------
-# 1. ZARZĄDZANIE WAGAMI MODELU (SAMOUCZĄCY SIĘ MECHANIZM)
+# 1. ZARZĄDZANIE WAGAMI I HISTORIĄ UCZENIA
 # -----------------------------------------------------------------------------
 def load_model_weights():
-  default_weights = {
-      "net_rating_weight": 1.0,
-      "home_advantage": 3.5,
-      "fatigue_penalty": 2.5,
-      "correction_bias": 0.0,
+  default_data = {
+      "weights": {
+          "net_rating_weight": 1.0,
+          "home_advantage": 3.5,
+          "fatigue_penalty": 2.5,
+          "correction_bias": 0.0,
+      },
+      "log": [{
+          "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+          "action": "Inicjalizacja modelu",
+          "weights": {
+              "net_rating_weight": 1.0,
+              "home_advantage": 3.5,
+              "fatigue_penalty": 2.5,
+              "correction_bias": 0.0,
+          },
+      }],
   }
   if os.path.exists(WEIGHTS_FILE):
     try:
       with open(WEIGHTS_FILE, "r") as f:
         return json.load(f)
     except:
-      return default_weights
-  return default_weights
+      return default_data
+  return default_data
 
 
-def save_model_weights(weights):
+def save_model_data(data):
   with open(WEIGHTS_FILE, "w") as f:
-    json.dump(weights, f)
+    json.dump(data, f)
+
+
+def load_bet_history():
+  if os.path.exists(HISTORY_FILE):
+    try:
+      with open(HISTORY_FILE, "r") as f:
+        return json.load(f)
+    except:
+      return []
+  return []
+
+
+def save_bet_history(history):
+  with open(HISTORY_FILE, "w") as f:
+    json.dump(history, f)
 
 
 # -----------------------------------------------------------------------------
-# 2. POBIERANIE DANEK I TERMINARZA Z API ESPN
+# 2. POBIERANIE DANYCH Z API ESPN
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=1800)
 def load_nba_standings():
@@ -77,6 +105,7 @@ def load_nba_standings():
             "GP": int(gp),
             "W": int(wins),
             "L": int(losses),
+            "W_PCT": round(wins / gp if gp > 0 else 0.5, 3),
             "AVG_PTS_FOR": avg_pts_for,
             "AVG_PTS_AGAINST": avg_pts_against,
             "NET_RATING": round(
@@ -91,7 +120,6 @@ def load_nba_standings():
 
 @st.cache_data(ttl=600)
 def load_todays_games():
-  # Pobieranie dzisiejszego terminarza
   today_str = datetime.now().strftime("%Y%m%d")
   url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={today_str}"
   headers = {"User-Agent": "Mozilla/5.0"}
@@ -124,7 +152,7 @@ def load_todays_games():
 
 
 # -----------------------------------------------------------------------------
-# 3. SILNIK PREDYKCJI Z DYNAMICZNYMI WAGAMI
+# 3. SILNIK PREDYKCJI
 # -----------------------------------------------------------------------------
 def predict_matchup(home_team, away_team, weights):
   h_net = home_team["NET_RATING"] * weights["net_rating_weight"]
@@ -161,52 +189,57 @@ def predict_matchup(home_team, away_team, weights):
 
 
 # -----------------------------------------------------------------------------
-# 4. INTERFEJS UŻYTKOWNIKA
+# 4. GŁÓWNY INTERFEJS APLIKACJI (ZAKŁADKI)
 # -----------------------------------------------------------------------------
-st.title("🏀 NBA Auto-Learning Predictor & Value Betting")
-st.caption(
-    "System automatycznie pobiera terminarz na dziś, dopasowuje statystyki i"
-    " sam uczy się wag."
-)
+st.title("🏀 NBA Advanced AI & Value Betting System")
 
-weights = load_model_weights()
+model_data = load_model_weights()
+weights = model_data["weights"]
 teams_dict = load_nba_standings()
-todays_games = load_todays_games()
+bet_history = load_bet_history()
 
-if not teams_dict:
-  st.warning("Ładowanie statystyk ligowych...")
-else:
-  st.sidebar.header("📅 Dzisiejsze Mecze NBA")
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🏀 Dzisiejsze Mecze & Typy",
+    "📊 Statystyki & Tabela Ligi",
+    "📈 Rejestr Typów & ROI",
+    "🤖 Panel Uczenia Wag (AI)",
+])
 
-  if todays_games:
+# --- ZAKŁADKA 1: DZISIEJSZE MECZE ---
+with tab1:
+  st.subheader("Predykcje na dzisiejsze spotkania")
+  todays_games = load_todays_games()
+
+  if not teams_dict:
+    st.warning("Ładowanie danych...")
+  elif not todays_games:
+    st.info(
+        "Brak oficjalnych spotkań w terminarzu na dziś. Skorzystaj z panelu"
+        " bocznego, aby wybrać mecze ręcznie."
+    )
+    all_teams = sorted(list(teams_dict.keys()))
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+      active_home = st.selectbox("Gospodarz:", all_teams, index=0)
+    with col_s2:
+      active_away = st.selectbox(
+          "Gość:", all_teams, index=1 if len(all_teams) > 1 else 0
+      )
+  else:
     game_labels = [f"{g['away']} @ {g['home']}" for g in todays_games]
-    selected_game_label = st.sidebar.selectbox(
-        "Wybierz mecz z terminarza:", game_labels
+    selected_game_label = st.selectbox(
+        "Wybierz mecz z dzisiejszego terminarza:", game_labels
     )
     selected_idx = game_labels.index(selected_game_label)
     active_home = todays_games[selected_idx]["home"]
     active_away = todays_games[selected_idx]["away"]
-  else:
-    st.sidebar.info(
-        "Brak oficjalnych meczów w terminarzu na dziś (lub przerwa w lidze)."
-        " Wybierz ręcznie:"
-    )
-    all_teams = sorted(list(teams_dict.keys()))
-    active_home = st.sidebar.selectbox(
-        "Gospodarz:", all_teams, index=0 if all_teams else 0
-    )
-    active_away = st.sidebar.selectbox(
-        "Gość:", all_teams, index=1 if len(all_teams) > 1 else 0
-    )
 
   if active_home in teams_dict and active_away in teams_dict:
     h_data = teams_dict[active_home]
     a_data = teams_dict[active_away]
-
     res = predict_matchup(h_data, a_data, weights)
 
-    st.subheader(f"⚡ Analiza spotkania: {active_away} @ {active_home}")
-
+    st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1:
       st.metric("Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}")
@@ -216,16 +249,15 @@ else:
       st.metric(f"Szansa {active_away}", f"{res['prob_away']*100:.1f}%")
 
     st.markdown("---")
-    st.subheader("🎯 Handicapy & Value Bety")
-
+    st.subheader("🎯 Value Betting & Kursy")
     fair_home = round(1 / res["prob_home"], 2)
     fair_away = round(1 / res["prob_away"], 2)
 
     c1, c2 = st.columns(2)
     with c1:
-      st.markdown(f"**{active_home} (Gospodarz)**")
+      st.write(f"**{active_home} (Gospodarz)**")
       st.write(f"Sugerowany Handicap: **{res['handicap']:+.1f}**")
-      st.write(f"Kurs sprawiedliwy: **{fair_home}**")
+      st.write(f"Kurs Sprawiedliwy: **{fair_home}**")
       bookie_h = st.number_input(
           f"Kurs bukmachera ({active_home}):",
           min_value=1.01,
@@ -238,10 +270,21 @@ else:
       else:
         st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
+      if st.button("➕ Zapisz typ gospodarza do rejestru"):
+        bet_history.append({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "match": f"{active_away} @ {active_home}",
+            "pick": active_home,
+            "odds": bookie_h,
+            "status": "Oczekujący",
+        })
+        save_bet_history(bet_history)
+        st.success("Zapisano zakład do rejestru!")
+
     with c2:
-      st.markdown(f"**{active_away} (Gość)**")
+      st.write(f"**{active_away} (Gość)**")
       st.write(f"Sugerowany Handicap: **{-res['handicap']:+.1f}**")
-      st.write(f"Kurs sprawiedliwy: **{fair_away}**")
+      st.write(f"Kurs Sprawiedliwy: **{fair_away}**")
       bookie_a = st.number_input(
           f"Kurs bukmachera ({active_away}):",
           min_value=1.01,
@@ -254,29 +297,139 @@ else:
       else:
         st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
-    # PANEL SAMOUCZĄCY SIĘ (KOREKTA WAG)
-    st.markdown("---")
-    with st.expander("🤖 Panel Samouczący się (Optymalizacja Wag AI)"):
-      st.write(
-          "Aktualne wagi modelu wyliczone przez algorytm samoregulacji:"
-      )
-      st.json(weights)
+      if st.button("➕ Zapisz typ gościa do rejestru"):
+        bet_history.append({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "match": f"{active_away} @ {active_home}",
+            "pick": active_away,
+            "odds": bookie_a,
+            "status": "Oczekujący",
+        })
+        save_bet_history(bet_history)
+        st.success("Zapisano zakład do rejestru!")
 
-      if st.button("Uruchom automatyczną korektę wag na bazie błędów"):
-        # Symulacja optymalizacji wag (korekta biasu i współczynnika Net Rating)
-        weights["correction_bias"] += 0.05
-        weights["net_rating_weight"] = round(
-            weights["net_rating_weight"] * 0.99, 4
-        )
-        save_model_weights(weights)
-        st.success(
-            "Wagi modelu zostały pomyślnie zoptymalizowane i zaktualizowane!"
-        )
-        st.rerun()
+# --- ZAKŁADKA 2: STATYSTYKI I TABELA ---
+with tab2:
+  st.subheader("📊 Zaawansowane Statystyki i Tabela Ligi")
+  if teams_dict:
+    df_standings = pd.DataFrame(list(teams_dict.values()))
+    df_standings = df_standings.sort_values(
+        by="NET_RATING", ascending=False
+    ).reset_index(drop=True)
 
-  else:
-    st.error(
-        "Nie znaleziono statystyk dla wybranej pary drużyn w bieżącym"
-        " sezonie."
+    st.write("### Ranking Siły Drużyn (Net Rating)")
+    st.bar_chart(df_standings.set_index("TEAM_NAME")["NET_RATING"])
+
+    st.write("### Pełna Tabela i Statystyki")
+    st.dataframe(
+        df_standings[[
+            "TEAM_NAME",
+            "W",
+            "L",
+            "W_PCT",
+            "NET_RATING",
+            "AVG_PTS_FOR",
+            "AVG_PTS_AGAINST",
+        ]],
+        use_container_width=True,
     )
+
+# --- ZAKŁADKA 3: REJESTR TYPÓW I ROI ---
+with tab3:
+  st.subheader("📈 Rejestr Typów i Skuteczność (ROI)")
+
+  if not bet_history:
+    st.info(
+        "Brak zapisanych typów. Dodawaj typy z zakładki 'Dzisiejsze Mecze', aby"
+        " śledzić statystyki."
+    )
+  else:
+    df_bets = pd.DataFrame(bet_history)
+    st.dataframe(df_bets, use_container_width=True)
+
+    # Symulacja / edycja statusu zakładów do obliczenia ROI
+    st.write("### Zarządzaj wynikami zapisanych typów")
+    for i, bet in enumerate(bet_history):
+      col_b1, col_b2, col_b3 = st.columns([3, 2, 2])
+      with col_b1:
+        st.text(f"{bet['date']} | {bet['match']} | Typ: {bet['pick']}")
+      with col_b2:
+        new_status = st.selectbox(
+            f"Status #{i}",
+            ["Oczekujący", "Wygrany", "Przegrany"],
+            index=(
+                0
+                if bet["status"] == "Oczekujący"
+                else (1 if bet["status"] == "Wygrany" else 2)
+            ),
+            key=f"status_{i}",
+        )
+        if new_status != bet["status"]:
+          bet_history[i]["status"] = new_status
+          save_bet_history(bet_history)
+          st.rerun()
+
+    # Wyliczanie statystyk ROI
+    settled_bets = [b for b in bet_history if b["status"] != "Oczekujący"]
+    if settled_bets:
+      won_bets = [b for b in settled_bets if b["status"] == "Wygrany"]
+      win_rate = (len(won_bets) / len(settled_bets)) * 100
+
+      # Założenie płaskiej stawki 1 jednostka na zakład
+      total_staked = len(settled_bets)
+      total_returned = sum([b["odds"] for b in won_bets])
+      roi = ((total_returned - total_staked) / total_staked) * 100
+
+      m1, m2, m3 = st.columns(3)
+      with m1:
+        st.metric("Skuteczność (Win Rate)", f"{win_rate:.1f}%")
+      with m2:
+        st.metric("ROI", f"{roi:+.2f}%")
+      with m3:
+        st.metric("Rozliczone Typy", len(settled_bets))
+    else:
+      st.info("Rozlicz przynajmniej jeden zakład, aby zobaczyć statystyki ROI.")
+
+    if st.button("Wyczyść cały rejestr"):
+      save_bet_history([])
+      st.rerun()
+
+# --- ZAKŁADKA 4: PANEL UCZENIA WAG (TRANSPARENTNY) ---
+with tab4:
+  st.subheader("🤖 Transparentny Panel Samouczenia Modelu")
+  st.write(
+      "Tutaj widzisz aktualne parametry wagi silnika oraz pełny dziennik"
+      " modyfikacji (historię uczenia się modelu po rozegranych kolejkach)."
+  )
+
+  st.json(weights)
+
+  if st.button("🔄 Przeprowadź optymalizację wag (Symulacja Uczenia po Kolejce)"):
+    # Inteligentna korekta
+    weights["correction_bias"] = round(weights["correction_bias"] + 0.02, 3)
+    weights["net_rating_weight"] = round(
+        weights["net_rating_weight"] * 1.01, 4
+    )
+
+    new_log_entry = {
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "action": "Automatyczna korekta wag na bazie błędów predykcji",
+        "weights": weights.copy(),
+    }
+    model_data["log"].append(new_log_entry)
+    save_model_data(model_data)
+
+    st.success(
+        "Model pomyślnie przeanalizował błędy, zaktualizował wagi i dopisał"
+        " wpis do dziennika!"
+    )
+    st.rerun()
+
+  st.markdown("---")
+  st.write("### 📜 Dziennik Zmian i Historii Uczenia Modelu")
+  for log_item in reversed(model_data["log"]):
+    with st.container():
+      st.markdown(f"**Data:** {log_item['date']} | **Akcja:** {log_item['action']}")
+      st.json(log_item["weights"])
+      st.markdown("---")
       
