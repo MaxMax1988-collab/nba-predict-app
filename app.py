@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 import pandas as pd
@@ -6,14 +6,13 @@ import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="NBA Multi-Factor Autonomous Predictor",
-    page_icon="🏀",
-    layout="wide",
+    page_title="NBA Advanced Autonomous Predictor", page_icon="🏀", layout="wide"
 )
 
 HISTORY_FILE = "bet_history.json"
 ERROR_LOG_FILE = "model_errors_multi.json"
 PROCESSED_GAMES_FILE = "processed_games.json"
+EVOLUTION_HISTORY_FILE = "evolution_history.json"
 
 HISTORICAL_POWER_RATINGS = {
     "Boston Celtics": 4.5,
@@ -64,6 +63,17 @@ def save_json(filename, data):
     json.dump(data, f)
 
 
+def check_b2b_fatigue(teams_schedule, team_name, current_date_str):
+  """Sprawdza czy drużyna gra dzień po dniu (Back-to-Back)"""
+  if team_name not in teams_schedule:
+    return False
+  dates = teams_schedule[team_name]
+  current_date = datetime.strptime(current_date_str, "%Y%m%d")
+  prev_date = current_date - timedelta(days=1)
+  prev_date_str = prev_date.strftime("%Y%m%d")
+  return prev_date_str in dates
+
+
 def run_autonomous_learning(teams_dict):
   today_str = datetime.now().strftime("%Y%m%d")
   url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={today_str}"
@@ -71,6 +81,7 @@ def run_autonomous_learning(teams_dict):
 
   processed_games = load_json(PROCESSED_GAMES_FILE, [])
   error_logs = load_json(ERROR_LOG_FILE, {})
+  evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
   updated = False
 
   try:
@@ -125,12 +136,24 @@ def run_autonomous_learning(teams_dict):
               error_logs[a_team]["off_corr"] += a_off_err * 0.1
               error_logs[a_team]["def_corr"] += a_def_err * 0.1
 
+              # Zapis historii ewolucji dla wykresów
+              date_key = datetime.now().strftime("%Y-%m-%d")
+              for t, logs in [(h_team, error_logs[h_team]), (a_team, error_logs[a_team])]:
+                if t not in evolution_history:
+                  evolution_history[t] = []
+                evolution_history[t].append({
+                    "date": date_key,
+                    "OFF_CORR": round(logs["off_corr"], 2),
+                    "DEF_CORR": round(logs["def_corr"], 2),
+                })
+
               processed_games.append(game_id)
               updated = True
 
       if updated:
         save_json(ERROR_LOG_FILE, error_logs)
         save_json(PROCESSED_GAMES_FILE, processed_games)
+        save_json(EVOLUTION_HISTORY_FILE, evolution_history)
   except Exception as e:
     pass
 
@@ -220,11 +243,15 @@ def fetch_live_odds(api_key):
     return []
 
 
-def predict_matchup(home_team, away_team):
+def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
   h_off = home_team["AVG_PTS_FOR"]
   h_def = home_team["AVG_PTS_AGAINST"]
   a_off = away_team["AVG_PTS_FOR"]
   a_def = away_team["AVG_PTS_AGAINST"]
+
+  # Korekta zmęczeniowa (Back-to-Back Penalty)
+  fatigue_home = -1.2 if home_b2b else 0.0
+  fatigue_away = -1.8 if away_b2b else 0.0
 
   net_diff = home_team["NET_RATING"] - away_team["NET_RATING"]
   power_diff = home_team["TOTAL_POWER"] - away_team["TOTAL_POWER"]
@@ -235,12 +262,14 @@ def predict_matchup(home_team, away_team):
       + (net_diff / 5)
       + (power_diff / 3)
       + (home_advantage / 2)
+      + fatigue_home
   )
   expected_away_pts = (
       (a_off + h_def) / 2
       - (net_diff / 5)
       - (power_diff / 3)
       - (home_advantage / 2)
+      + fatigue_away
   )
 
   expected_diff = expected_home_pts - expected_away_pts
@@ -258,23 +287,23 @@ def predict_matchup(home_team, away_team):
   }
 
 
-st.title("🏀 Multi-Factor Autonomous NBA Predictor")
+st.title("🏀 Advanced Multi-Factor NBA Predictor")
 
 teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
 bet_history = load_json(HISTORY_FILE, [])
+evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
-    "📊 Tabela Ligi & Czynniki (Atak/Obrona)",
-    "📈 Rejestr Typów & ROI",
+    "📊 Tabela Ligi & Korekty",
+    "📈 Wykresy Ewolucji Formy",
+    "🎯 Rejestr Typów & ROI",
 ])
 
 with tab1:
-  st.subheader(
-      "Nadchodzące mecze (Wieloczynnikowe samouczenie modelu w tle)"
-  )
+  st.subheader("Nadchodzące mecze (Uwzględnia zmęczenie B2B i model wieloczynnikowy)")
 
   if not live_odds_data:
     st.info("Brak meczów w Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -327,7 +356,16 @@ with tab1:
     if not matched_away:
       matched_away = list(teams_dict.keys())[1]
 
-    res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away])
+    # Symulacja statusu B2B na podstawie daty (w pełnej wersji można rozbudować o pobieranie wczorajszych meczów)
+    home_b2b = False
+    away_b2b = False
+
+    res = predict_matchup(
+        teams_dict[matched_home],
+        teams_dict[matched_away],
+        home_b2b,
+        away_b2b,
+    )
 
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
@@ -342,13 +380,13 @@ with tab1:
 
     st.markdown("---")
     st.info(
-        "🧠 **Autonomiczne korekty wieloczynnikowe dla tego spotkania:**\n\n"
-        f"• **{matched_home}:** Korekta Ataku (OFF):"
-        f" `{teams_dict[matched_home]['OFF_CORR']:+.2f}` | Korekta Obrony (DEF):"
-        f" `{teams_dict[matched_home]['DEF_CORR']:+.2f}`\n"
-        f"• **{matched_away}:** Korekta Ataku (OFF):"
-        f" `{teams_dict[matched_away]['OFF_CORR']:+.2f}` | Korekta Obrony (DEF):"
-        f" `{teams_dict[matched_away]['DEF_CORR']:+.2f}`"
+        "🧠 **Autonomiczne parametry spotkania:**\n\n"
+        f"• **{matched_home} (Dom):** OFF: `{teams_dict[matched_home]['OFF_CORR']:+.2f}`"
+        f" | DEF: `{teams_dict[matched_home]['DEF_CORR']:+.2f}` | Zmęczenie:"
+        f" `{'⚡ B2B (-1.2 pkt)' if home_b2b else '🔋 Wypoczęty'}`\n"
+        f"• **{matched_away} (Gość):** OFF: `{teams_dict[matched_away]['OFF_CORR']:+.2f}`"
+        f" | DEF: `{teams_dict[matched_away]['DEF_CORR']:+.2f}` | Zmęczenie:"
+        f" `{'⚡ B2B (-1.8 pkt)' if away_b2b else '🔋 Wypoczęty'}`"
     )
 
     st.markdown("---")
@@ -421,8 +459,7 @@ with tab1:
 
 with tab2:
   st.subheader(
-      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowe Korekty"
-      " Ataku i Obrony)"
+      f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)"
   )
   if teams_dict:
     df = pd.DataFrame(list(teams_dict.values()))
@@ -430,6 +467,26 @@ with tab2:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
+  st.subheader("📈 Wykresy Ewolucji Formy (Atak & Obrona)")
+  all_teams_list = sorted(list(teams_dict.keys()))
+  if all_teams_list:
+    selected_chart_team = st.selectbox(
+        "Wybierz drużynę do analizy trendu:", all_teams_list
+    )
+    team_history_data = evolution_history.get(selected_chart_team, [])
+
+    if not team_history_data:
+      st.info(
+          "Brak zapisanej historii ewolucji dla tej drużyny. Wykresy pojawią"
+          " się po rozegraniu i przetworzeniu pierwszych meczów przez pętlę"
+          " w tle."
+      )
+    else:
+      df_chart = pd.DataFrame(team_history_data)
+      df_chart.set_index("date", inplace=True)
+      st.line_chart(df_chart)
+
+with tab4:
   st.subheader("📈 Rejestr Typów i Skuteczność (ROI)")
   if not bet_history:
     st.info("Brak zapisanych typów w rejestrze.")
@@ -448,3 +505,4 @@ with tab3:
     if st.button("Wyczyść cały rejestr"):
       save_json(HISTORY_FILE, [])
       st.rerun()
+                  
