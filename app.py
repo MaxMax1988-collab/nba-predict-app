@@ -1,16 +1,38 @@
 from datetime import datetime
+import json
+import os
 import pandas as pd
 import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="NBA AI Predictor - Faza 2", page_icon="🏀", layout="wide"
+    page_title="NBA AI Predictor - Faza 3: Value Bets & ROI",
+    page_icon="🏀",
+    layout="wide",
 )
 
 st.title("🏀 NBA AI Predictor & Value Betting System")
 
+HISTORY_FILE = "bet_history.json"
 
-# 1. POBIERANIE BAZY DRUŻYN
+
+# 1. ZARZĄDZANIE HISTORIĄ ZAKŁADÓW
+def load_bet_history():
+  if os.path.exists(HISTORY_FILE):
+    try:
+      with open(HISTORY_FILE, "r") as f:
+        return json.load(f)
+    except:
+      return []
+  return []
+
+
+def save_bet_history(history):
+  with open(HISTORY_FILE, "w") as f:
+    json.dump(history, f)
+
+
+# 2. POBIERANIE BAZY DRUŻYN
 @st.cache_data(ttl=1800)
 def fetch_nba_standings():
   now = datetime.now()
@@ -34,7 +56,7 @@ def fetch_nba_standings():
             "GP": 0,
             "W": 0,
             "L": 0,
-            "AVG_PTS_FOR": 112.0,  # Wartość bazowa na start sezonu
+            "AVG_PTS_FOR": 112.0,
             "AVG_PTS_AGAINST": 112.0,
             "NET_RATING": 0.0,
         }
@@ -44,7 +66,7 @@ def fetch_nba_standings():
     return {}, season_year
 
 
-# 2. POBIERANIE DZISIEJSZEGO TERMINARZA
+# 3. POBIERANIE TERMINARZA
 @st.cache_data(ttl=600)
 def load_todays_games():
   today_str = datetime.now().strftime("%Y%m%d")
@@ -69,9 +91,8 @@ def load_todays_games():
     return []
 
 
-# 3. SILNIK PREDYKCJI
+# 4. SILNIK PREDYKCJI
 def predict_matchup(home_team, away_team):
-  # Logiczny model oparty na różnicy Net Rating + stała przewaga parkietu (3.0 pkt)
   net_diff = home_team["NET_RATING"] - away_team["NET_RATING"]
   expected_diff = net_diff + 3.0
 
@@ -86,7 +107,6 @@ def predict_matchup(home_team, away_team):
       1,
   )
 
-  # Prawdopodobieństwo wygranej (funkcja sigmoidalna dostosowana do koszykówki)
   prob_home = 1 / (1 + 10 ** (-expected_diff / 10.0))
   prob_away = 1 - prob_home
   handicap = -round(expected_diff * 2) / 2
@@ -102,16 +122,18 @@ def predict_matchup(home_team, away_team):
 
 teams_dict, season_year = fetch_nba_standings()
 todays_games = load_todays_games()
+bet_history = load_bet_history()
 
-tab1, tab2 = st.tabs(["🏀 Dzisiejsze Mecze i Typy", "📊 Tabela Ligi"])
+tab1, tab2, tab3 = st.tabs([
+    "🏀 Dzisiejsze Mecze & Value Bets",
+    "📊 Tabela Ligi",
+    "📈 Rejestr Typów & ROI",
+])
 
 with tab1:
-  st.subheader("Predykcje na dzisiejsze spotkania")
+  st.subheader("Predykcje i Value Betting na dzisiaj")
   if not todays_games:
-    st.info(
-        "Brak oficjalnych spotkań w terminarzu na dziś. Możesz wybrać drużyny"
-        " ręcznie do testów:"
-    )
+    st.info("Brak oficjalnych spotkań w terminarzu na dziś.")
     all_teams = sorted(list(teams_dict.keys()))
     if all_teams:
       col1, col2 = st.columns(2)
@@ -143,7 +165,65 @@ with tab1:
       with c3:
         st.metric(f"Szansa {a_name} (Gość)", f"{res['prob_away']*100:.1f}%")
 
-      st.write(f"Sugerowany Handicap dla gospodarza: **{res['handicap']:+.1f}**")
+      st.markdown("---")
+      st.subheader("🎯 Kalkulator Value Betów")
+      fair_home = round(1 / res["prob_home"], 2)
+      fair_away = round(1 / res["prob_away"], 2)
+
+      col_b1, col_b2 = st.columns(2)
+      with col_b1:
+        st.write(f"**{h_name} (Gospodarz)**")
+        st.write(f"Sugerowany Handicap: **{res['handicap']:+.1f}**")
+        st.write(f"Kurs Sprawiedliwy: **{fair_home}**")
+        bookie_h = st.number_input(
+            f"Kurs bukmachera ({h_name}):",
+            min_value=1.01,
+            value=fair_home,
+            step=0.01,
+        )
+        ev_h = (res["prob_home"] * bookie_h) - 1
+        if ev_h > 0:
+          st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}%")
+        else:
+          st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
+
+        if st.button("➕ Zapisz typ gospodarza"):
+          bet_history.append({
+              "date": datetime.now().strftime("%Y-%m-%d"),
+              "match": f"{a_name} @ {h_name}",
+              "pick": h_name,
+              "odds": bookie_h,
+              "status": "Oczekujący",
+          })
+          save_bet_history(bet_history)
+          st.success("Zapisano do rejestru!")
+
+      with col_b2:
+        st.write(f"**{a_name} (Gość)**")
+        st.write(f"Sugerowany Handicap: **{-res['handicap']:+.1f}**")
+        st.write(f"Kurs Sprawiedliwy: **{fair_away}**")
+        bookie_a = st.number_input(
+            f"Kurs bukmachera ({a_name}):",
+            min_value=1.01,
+            value=fair_away,
+            step=0.01,
+        )
+        ev_a = (res["prob_away"] * bookie_a) - 1
+        if ev_a > 0:
+          st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}%")
+        else:
+          st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
+
+        if st.button("➕ Zapisz typ gościa"):
+          bet_history.append({
+              "date": datetime.now().strftime("%Y-%m-%d"),
+              "match": f"{a_name} @ {h_name}",
+              "pick": a_name,
+              "odds": bookie_a,
+              "status": "Oczekujący",
+          })
+          save_bet_history(bet_history)
+          st.success("Zapisano do rejestru!")
 
 with tab2:
   st.subheader(f"Tabela Sezonu {season_year-1}/{season_year}")
@@ -151,4 +231,48 @@ with tab2:
     df = pd.DataFrame(list(teams_dict.values()))
     df = df.sort_values(by="TEAM_NAME").reset_index(drop=True)
     st.dataframe(df, use_container_width=True)
-      
+
+with tab3:
+  st.subheader("📈 Rejestr Typów i Skuteczność (ROI)")
+  if not bet_history:
+    st.info(
+        "Brak zapisanych typów. Dodawaj typy z zakładki z meczami, aby je"
+        " śledzić."
+    )
+  else:
+    df_bets = pd.DataFrame(bet_history)
+    st.dataframe(df_bets, use_container_width=True)
+
+    st.write("### Zarządzaj statusami zakładów")
+    for i, bet in enumerate(bet_history):
+      col_s1, col_s2 = st.columns([3, 2])
+      with col_s1:
+        st.text(f"{bet['date']} | {bet['match']} | Typ: {bet['pick']}")
+      with col_s2:
+        new_status = st.selectbox(
+            f"Status #{i}",
+            ["Oczekujący", "Wygrany", "Przegrany"],
+            index=(
+                0
+                if bet["status"] == "Oczekujący"
+                else (1 if bet["status"] == "Wygrany" else 2)
+            ),
+            key=f"status_{i}",
+        )
+        if new_status != bet["status"]:
+          bet_history[i]["status"] = new_status
+          save_bet_history(bet_history)
+          st.rerun()
+
+    settled = [b for b in bet_history if b["status"] != "Oczekujący"]
+    if settled:
+      won = [b for b in settled if b["status"] == "Wygrany"]
+      win_rate = (len(won) / len(settled)) * 100
+      roi = (((sum([b["odds"] for b in won]) - len(settled)) / len(settled))) * 100
+      st.metric("Skuteczność (Win Rate)", f"{win_rate:.1f}%")
+      st.metric("ROI", f"{roi:+.2f}%")
+
+    if st.button("Wyczyść cały rejestr"):
+      save_bet_history([])
+      st.rerun()
+            
