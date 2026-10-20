@@ -1,53 +1,18 @@
 from datetime import datetime
 import json
 import os
-import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="NBA Advanced AI & Value Betting System",
+    page_title="NBA Predictor & Odds API Integration",
     page_icon="🏀",
     layout="wide",
 )
 
-WEIGHTS_FILE = "model_weights.json"
 HISTORY_FILE = "bet_history.json"
-
-
-# -----------------------------------------------------------------------------
-# 1. ZARZĄDZANIE WAGAMI, AI ORAZ HISTORIĄ ZAKŁADÓW
-# -----------------------------------------------------------------------------
-def load_model_data():
-  default_data = {
-      "weights": {
-          "net_rating_weight": 1.0,
-          "home_advantage": 3.0,
-          "correction_bias": 0.0,
-      },
-      "log": [{
-          "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-          "action": "Inicjalizacja systemu predykcyjnego",
-          "weights": {
-              "net_rating_weight": 1.0,
-              "home_advantage": 3.0,
-              "correction_bias": 0.0,
-          },
-      }],
-  }
-  if os.path.exists(WEIGHTS_FILE):
-    try:
-      with open(WEIGHTS_FILE, "r") as f:
-        return json.load(f)
-    except:
-      return default_data
-  return default_data
-
-
-def save_model_data(data):
-  with open(WEIGHTS_FILE, "w") as f:
-    json.dump(data, f)
+ODDS_API_KEY = "5f16c049cc0baccae587e0f50116f255"
 
 
 def load_bet_history():
@@ -65,9 +30,7 @@ def save_bet_history(history):
     json.dump(history, f)
 
 
-# -----------------------------------------------------------------------------
-# 2. POBIERANIE DANYCH Z API ESPN
-# -----------------------------------------------------------------------------
+# 1. POBIERANIE STATYSTYK DRUŻYN Z ESPN (CZYSTY START 0-0)
 @st.cache_data(ttl=1800)
 def fetch_nba_standings():
   now = datetime.now()
@@ -85,157 +48,191 @@ def fetch_nba_standings():
       for entry in children.get("standings", {}).get("entries", []):
         team_info = entry.get("team", {})
         team_name = team_info.get("displayName", "Unknown")
+        stats_list = entry.get("stats", [])
 
-        # Czysty start nowego sezonu – bilanse 0, bazowe punkty 112.0
+        def get_stat(name, default=0.0):
+          for s in stats_list:
+            if s.get("name") == name:
+              return float(s.get("value", default))
+          return float(default)
+
+        gp = int(get_stat("gamesPlayed", 0))
+        wins = int(get_stat("wins", 0))
+        losses = int(get_stat("losses", 0))
+        avg_pts_for = get_stat("avgPointsFor", 112.0)
+        if avg_pts_for == 0.0:
+          avg_pts_for = 112.0
+        avg_pts_against = get_stat("avgPointsAgainst", 112.0)
+        if avg_pts_against == 0.0:
+          avg_pts_against = 112.0
+
+        net_rating = round(avg_pts_for - avg_pts_against, 2)
+
         teams_dict[team_name] = {
             "TEAM_NAME": team_name,
-            "GP": 0,
-            "W": 0,
-            "L": 0,
-            "AVG_PTS_FOR": 112.0,
-            "AVG_PTS_AGAINST": 112.0,
-            "NET_RATING": 0.0,
+            "GP": gp,
+            "W": wins,
+            "L": losses,
+            "AVG_PTS_FOR": round(avg_pts_for, 1),
+            "AVG_PTS_AGAINST": round(avg_pts_against, 1),
+            "NET_RATING": net_rating,
         }
     return teams_dict, season_year
   except Exception as e:
-    st.error(f"Błąd pobierania drużyn: {e}")
+    st.error(f"Błąd pobierania danych drużyn: {e}")
     return {}, season_year
 
 
+# 2. POBIERANIE KURSÓW Z THE ODDS API
 @st.cache_data(ttl=600)
-def load_todays_games():
-  today_str = datetime.now().strftime("%Y%m%d")
-  url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={today_str}"
-  headers = {"User-Agent": "Mozilla/5.0"}
-  games = []
+def fetch_live_odds():
+  url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={ODDS_API_KEY}&regions=us,eu&markets=h2h&oddsFormat=decimal"
   try:
-    res = requests.get(url, headers=headers, timeout=10)
-    data = res.json()
-    for event in data.get("events", []):
-      comp = event.get("competitions", [{}])[0]
-      home_team, away_team = None, None
-      for c in comp.get("competitors", []):
-        if c.get("homeAway") == "home":
-          home_team = c.get("team", {}).get("displayName")
-        elif c.get("homeAway") == "away":
-          away_team = c.get("team", {}).get("displayName")
-      if home_team and away_team:
-        games.append({"home": home_team, "away": away_team})
-    return games
+    res = requests.get(url, timeout=10)
+    if res.status_code == 200:
+      return res.json()
+    else:
+      return []
   except:
     return []
 
 
-# -----------------------------------------------------------------------------
 # 3. SILNIK PREDYKCJI
-# -----------------------------------------------------------------------------
-def predict_matchup(home_team, away_team, weights):
-  h_net = home_team["NET_RATING"] * weights["net_rating_weight"]
-  a_net = away_team["NET_RATING"] * weights["net_rating_weight"]
+def predict_matchup(home_team, away_team):
+  h_off = home_team["AVG_PTS_FOR"]
+  h_def = home_team["AVG_PTS_AGAINST"]
+  a_off = away_team["AVG_PTS_FOR"]
+  a_def = away_team["AVG_PTS_AGAINST"]
 
-  expected_diff = (
-      (h_net - a_net)
-      + weights["home_advantage"]
-      + weights["correction_bias"]
-  )
+  net_diff = home_team["NET_RATING"] - away_team["NET_RATING"]
+  home_advantage = 3.0
 
-  h_pts = round(
-      (home_team["AVG_PTS_FOR"] + away_team["AVG_PTS_AGAINST"]) / 2
-      + (expected_diff / 2),
-      1,
-  )
-  a_pts = round(
-      (away_team["AVG_PTS_FOR"] + home_team["AVG_PTS_AGAINST"]) / 2
-      - (expected_diff / 2),
-      1,
-  )
+  expected_home_pts = (h_off + a_def) / 2 + (net_diff / 4) + (home_advantage / 2)
+  expected_away_pts = (a_off + h_def) / 2 - (net_diff / 4) - (home_advantage / 2)
+  expected_diff = expected_home_pts - expected_away_pts
 
   prob_home = 1 / (1 + 10 ** (-expected_diff / 10.0))
   prob_away = 1 - prob_home
   handicap = -round(expected_diff * 2) / 2
 
   return {
-      "home_pts": h_pts,
-      "away_pts": a_pts,
+      "home_pts": round(expected_home_pts, 1),
+      "away_pts": round(expected_away_pts, 1),
       "prob_home": prob_home,
       "prob_away": prob_away,
       "handicap": handicap,
   }
 
 
-# -----------------------------------------------------------------------------
-# 4. GŁÓWNY INTERFEJS APLIKACJI
-# -----------------------------------------------------------------------------
-st.title("🏀 NBA Advanced AI & Value Betting System")
+# 4. INTERFEJS
+st.title("🏀 NBA Predictor & The Odds API Integration")
 
-model_data = load_model_data()
-weights = model_data["weights"]
 teams_dict, season_year = fetch_nba_standings()
-todays_games = load_todays_games()
+live_odds_data = fetch_live_odds()
 bet_history = load_bet_history()
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🏀 Dzisiejsze Mecze & Value Bets",
+tab1, tab2, tab3 = st.tabs([
+    "🏀 Mecze & Automatyczne Kursy (Odds API)",
     "📊 Tabela Ligi",
     "📈 Rejestr Typów & ROI",
-    "🤖 Panel Uczenia Wag (AI)",
 ])
 
-# --- ZAKŁADKA 1: DZISIEJSZE MECZE & VALUE BETS ---
 with tab1:
-  st.subheader("Predykcje i Value Betting na dzisiaj")
-  if not todays_games:
+  st.subheader("Automatyczne kursy bukmacherskie i Value Bets")
+
+  if not live_odds_data:
     st.info(
-        "Brak oficjalnych spotkań w terminarzu na dziś. Wybierz drużyny ręcznie:"
+        "Brak nadchodzących meczów w The Odds API na ten moment (lub limit"
+        " zapytań). Możesz wybrać drużyny ręcznie z bazy ESPN:"
     )
     all_teams = sorted(list(teams_dict.keys()))
     if all_teams:
-      col1, col2 = st.columns(2)
-      with col1:
-        active_home = st.selectbox("Gospodarz:", all_teams, index=0)
-      with col2:
-        active_away = st.selectbox(
+      c1, c2 = st.columns(2)
+      with c1:
+        manual_home = st.selectbox("Gospodarz:", all_teams, index=0)
+      with c2:
+        manual_away = st.selectbox(
             "Gość:", all_teams, index=1 if len(all_teams) > 1 else 0
         )
-      todays_games = [{"home": active_home, "away": active_away}]
 
-  if todays_games:
-    game_labels = [f"{g['away']} @ {g['home']}" for g in todays_games]
-    selected_label = st.selectbox("Wybierz mecz:", game_labels)
-    idx = game_labels.index(selected_label)
-
-    h_name = todays_games[idx]["home"]
-    a_name = todays_games[idx]["away"]
-
-    if h_name in teams_dict and a_name in teams_dict:
-      res = predict_matchup(teams_dict[h_name], teams_dict[a_name], weights)
-
-      st.markdown("---")
-      c1, c2, c3 = st.columns(3)
-      with c1:
-        st.metric("Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}")
-      with c2:
-        st.metric(f"Szansa {h_name} (Dom)", f"{res['prob_home']*100:.1f}%")
-      with c3:
-        st.metric(f"Szansa {a_name} (Gość)", f"{res['prob_away']*100:.1f}%")
-
-      st.markdown("---")
-      st.subheader("🎯 Kalkulator Value Betów")
-      fair_home = round(1 / res["prob_home"], 2)
-      fair_away = round(1 / res["prob_away"], 2)
-
-      col_b1, col_b2 = st.columns(2)
-      with col_b1:
-        st.write(f"**{h_name} (Gospodarz)**")
-        st.write(f"Sugerowany Handicap: **{res['handicap']:+.1f}**")
-        st.write(f"Kurs Sprawiedliwy: **{fair_home}**")
-        bookie_h = st.number_input(
-            f"Kurs bukmachera ({h_name}):",
-            min_value=1.01,
-            value=fair_home,
-            step=0.01,
+      if manual_home in teams_dict and manual_away in teams_dict:
+        res = predict_matchup(teams_dict[manual_home], teams_dict[manual_away])
+        st.markdown("---")
+        st.metric(
+            "Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}"
         )
-        ev_h = (res["prob_home"] * bookie_h) - 1
+        st.write(
+            f"Szansa gospodarza: {res['prob_home']*100:.1f}% | Szansa gościa:"
+            f" {res['prob_away']*100:.1f}%"
+        )
+  else:
+    match_labels = [
+        f"{m['away_team']} @ {m['home_team']}" for m in live_odds_data
+    ]
+    selected_match_label = st.selectbox(
+        "Wybierz mecz z The Odds API:", match_labels
+    )
+    match_idx = match_labels.index(selected_match_label)
+    match_info = live_odds_data[match_idx]
+
+    h_name = match_info["home_team"]
+    a_name = match_info["away_team"]
+
+    # Dopasowanie nazwy z Odds API do słownika ESPN (uproszczone wyszukiwanie po fragmencie)
+    matched_home, matched_away = None, None
+    for t_name in teams_dict.keys():
+      if h_name.lower() in t_name.lower() or t_name.lower() in h_name.lower():
+        matched_home = t_name
+      if a_name.lower() in t_name.lower() or t_name.lower() in a_name.lower():
+        matched_away = t_name
+
+    if not matched_home:
+      matched_home = list(teams_dict.keys())[0]
+    if not matched_away:
+      matched_away = list(teams_dict.keys())[1]
+
+    res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away])
+
+    st.markdown("---")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+      st.metric(
+          "Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}"
+      )
+    with c2:
+      st.metric(f"Szansa {matched_home} (Dom)", f"{res['prob_home']*100:.1f}%")
+    with c3:
+      st.metric(f"Szansa {matched_away} (Gość)", f"{res['prob_away']*100:.1f}%")
+
+    st.markdown("---")
+    st.subheader("🎯 Kursy z The Odds API & Kalkulator Value")
+
+    # Pobieramy średnie kursy od bukmacherów z JSON-a Odds API
+    bookmakers = match_info.get("bookmakers", [])
+    bookie_h_odds, bookie_a_odds = 0.0, 0.0
+
+    if bookmakers:
+      # Bierzemy pierwszy lepszy dostępny bukmacher z listy
+      outcomes = bookmakers[0].get("markets", [{}])[0].get("outcomes", [])
+      for out in outcomes:
+        if out.get("name") == h_name:
+          bookie_h_odds = float(out.get("price", 1.9))
+        elif out.get("name") == a_name:
+          bookie_a_odds = float(out.get("price", 1.9))
+
+    fair_home = round(1 / res["prob_home"], 2)
+    fair_away = round(1 / res["prob_away"], 2)
+
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+      st.write(f"**{matched_home} (Gospodarz)**")
+      st.write(f"Kurs Sprawiedliwy (Model): **{fair_home}**")
+      st.write(
+          f"Kurs Bukmachera (Odds API): **{bookie_h_odds if bookie_h_odds > 0 else 'Brak danych'}**"
+      )
+
+      if bookie_h_odds > 0:
+        ev_h = (res["prob_home"] * bookie_h_odds) - 1
         if ev_h > 0:
           st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}%")
         else:
@@ -244,25 +241,23 @@ with tab1:
         if st.button("➕ Zapisz typ gospodarza"):
           bet_history.append({
               "date": datetime.now().strftime("%Y-%m-%d"),
-              "match": f"{a_name} @ {h_name}",
-              "pick": h_name,
-              "odds": bookie_h,
+              "match": f"{matched_away} @ {matched_home}",
+              "pick": matched_home,
+              "odds": bookie_h_odds,
               "status": "Oczekujący",
           })
           save_bet_history(bet_history)
           st.success("Zapisano do rejestru!")
 
-      with col_b2:
-        st.write(f"**{a_name} (Gość)**")
-        st.write(f"Sugerowany Handicap: **{-res['handicap']:+.1f}**")
-        st.write(f"Kurs Sprawiedliwy: **{fair_away}**")
-        bookie_a = st.number_input(
-            f"Kurs bukmachera ({a_name}):",
-            min_value=1.01,
-            value=fair_away,
-            step=0.01,
-        )
-        ev_a = (res["prob_away"] * bookie_a) - 1
+    with col_b2:
+      st.write(f"**{matched_away} (Gość)**")
+      st.write(f"Kurs Sprawiedliwy (Model): **{fair_away}**")
+      st.write(
+          f"Kurs Bukmachera (Odds API): **{bookie_a_odds if bookie_a_odds > 0 else 'Brak danych'}**"
+      )
+
+      if bookie_a_odds > 0:
+        ev_a = (res["prob_away"] * bookie_a_odds) - 1
         if ev_a > 0:
           st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}%")
         else:
@@ -271,15 +266,14 @@ with tab1:
         if st.button("➕ Zapisz typ gościa"):
           bet_history.append({
               "date": datetime.now().strftime("%Y-%m-%d"),
-              "match": f"{a_name} @ {h_name}",
-              "pick": a_name,
-              "odds": bookie_a,
+              "match": f"{matched_away} @ {matched_home}",
+              "pick": matched_away,
+              "odds": bookie_a_odds,
               "status": "Oczekujący",
           })
           save_bet_history(bet_history)
           st.success("Zapisano do rejestru!")
 
-# --- ZAKŁADKA 2: TABELA LIGI ---
 with tab2:
   st.subheader(
       f"📊 Tabela Sezonu {season_year-1}/{season_year} (Czysty Start)"
@@ -289,9 +283,8 @@ with tab2:
     df = df.sort_values(by="TEAM_NAME").reset_index(drop=True)
     st.dataframe(df, use_container_width=True)
 
-# --- ZAKŁADKA 3: REJESTR TYPÓW & ROI ---
 with tab3:
-  st.subheader("📈 Rejestr Typów, Skuteczność i ROI")
+  st.subheader("📈 Rejestr Typów i Skuteczność (ROI)")
   if not bet_history:
     st.info("Brak zapisanych typów w rejestrze.")
   else:
@@ -330,38 +323,4 @@ with tab3:
     if st.button("Wyczyść cały rejestr"):
       save_bet_history([])
       st.rerun()
-
-# --- ZAKŁADKA 4: PANEL UCZENIA WAG (AI) & DZIENNIK ZMIAN ---
-with tab4:
-  st.subheader("🤖 Transparentny Panel Uczenia Wag Modelu (AI)")
-  st.write(
-      "Tutaj widzisz aktualne parametry silnika predykcyjnego oraz pełny"
-      " dziennik modyfikacji i uczenia się po rozegranych kolejkach."
-  )
-
-  st.json(weights)
-
-  if st.button("🔄 Symuluj optymalizację wag po kolejce"):
-    weights["correction_bias"] = round(weights["correction_bias"] + 0.01, 3)
-    weights["home_advantage"] = round(weights["home_advantage"] + 0.05, 2)
-
-    new_log = {
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "action": (
-            "Automatyczna optymalizacja wag na bazie błędów predykcji kolejki"
-        ),
-        "weights": weights.copy(),
-    }
-    model_data["log"].append(new_log)
-    save_model_data(model_data)
-    st.success("Wagi zostały zaktualizowane, a wpis trafił do dziennika!")
-    st.rerun()
-
-  st.markdown("---")
-  st.write("### 📜 Dziennik Zmian i Historii Uczenia")
-  for log_item in reversed(model_data["log"]):
-    with st.container():
-      st.markdown(f"**Data:** {log_item['date']} | **Akcja:** {log_item['action']}")
-      st.json(log_item["weights"])
-      st.markdown("---")
           
