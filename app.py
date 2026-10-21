@@ -228,7 +228,6 @@ def fetch_nba_standings():
 
 @st.cache_data(ttl=600)
 def fetch_live_odds(api_key):
-    # Pobieramy zarówno Moneyline (h2h) jak i Handicupy (spreads)
     url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads&oddsFormat=decimal"
     try:
         res = requests.get(url, timeout=10)
@@ -401,7 +400,6 @@ with tab1:
                                 bookie_a_odds = float(out.get("price", 1.9))
                     elif market.get("key") == "spreads":
                         for out in market.get("outcomes", []):
-                            # Wyciągamy domyślną linię handicapu dla gospodarza
                             if out.get("name") == h_name:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
@@ -461,63 +459,52 @@ with tab1:
                     save_json(HISTORY_FILE, bet_history)
                     st.success("Zapisano do rejestru!")
 
-        # --- NOWA SEKCJA: HYBRYDOWY BEZPIECZNY HANDICAP ---
         st.markdown("---")
         st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
 
-        # Obliczamy bezpieczny bufor modelu (odejmujemy 3.0 pkt od przewidywanej różnicy dla bezpieczeństwa)
-        raw_diff = res["expected_diff"]  # dodatnia = wygrywa gospodarz
+        raw_diff = res["expected_diff"]
         safety_buffer = 3.0
 
         if raw_diff > 0:
-            safe_model_spread = -(
-                abs(raw_diff) - safety_buffer
-            )  # np. model daje -5.5
-            recommended_pick = matched_home
+            model_margin = raw_diff
+            recommended_team = matched_home
+            safe_spread = -(model_margin - safety_buffer)
         else:
-            safe_model_spread = (
-                abs(raw_diff) - safety_buffer
-            )  # np. model daje +5.5
-            recommended_pick = matched_away
+            model_margin = abs(raw_diff)
+            recommended_team = matched_away
+            safe_spread = -(model_margin - safety_buffer)
 
-        safe_model_spread = round(safe_model_spread * 2) / 2
+        safe_spread = round(safe_spread * 2) / 2
 
         st.write(
-            f"• **Przewidywana różnica punktowa modelu:** `{raw_diff:+.1f} pkt`"
+            f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla"
+            f" **{recommended_team}**"
         )
         st.write(
-            f"• **Rekomendowany bezpieczny handicap (z buforem 3 pkt):**"
-            f" **{recommended_pick} ({safe_model_spread:+.1f})**"
+            f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):**"
+            f" **{recommended_team} ({safe_spread:+.1f})**"
         )
 
         if spread_bookie_line != 0.0:
+            if spread_team == recommended_team:
+                bookie_team_spread = spread_bookie_line
+            else:
+                bookie_team_spread = -spread_bookie_line
+
             st.write(
-                f"• **Aktualna linia bukmachera ({spread_team}):**"
-                f" `{spread_bookie_line:+.1f}` (Kurs: `{spread_bookie_odds}`)"
+                f"• **Aktualna linia bukmachera dla {recommended_team}:**"
+                f" `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)"
             )
-            # Ocena value na handicapie
-            if (
-                recommended_pick == matched_home
-                and spread_bookie_line > safe_model_spread
-            ):
+
+            if bookie_team_spread > safe_spread:
                 st.success(
-                    "✅ **OKAZJA NA HANDICAP:** Bukmacher daje korzystniejszą"
-                    f" linię ({spread_bookie_line:+.1f}) niż nasza bezpieczna"
-                    f" kalkulacja ({safe_model_spread:+.1f})!"
-                )
-            elif (
-                recommended_pick == matched_away
-                and spread_bookie_line < safe_model_spread
-            ):
-                st.success(
-                    "✅ **OKAZJA NA HANDICAP:** Bukmacher daje korzystniejszą"
-                    f" linię ({spread_bookie_line:+.1f}) niż nasza bezpieczna"
-                    f" kalkulacja ({safe_model_spread:+.1f})!"
+                    f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię"
+                    f" ({bookie_team_spread:+.1f}) dla {recommended_team}!"
                 )
             else:
                 st.info(
-                    "ℹ️ Linia bukmachera jest bliska kalkulacji modelu -"
-                    " brak wyraźnej anomalii."
+                    "ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego"
+                    " zapasu."
                 )
         else:
             st.info(
@@ -537,7 +524,7 @@ with tab2:
 with tab3:
     st.subheader("📈 Wykresy Ewolucji Formy (Atak & Obrona)")
     all_teams_list = sorted(list(teams_dict.keys()))
-    if all_tags := all_teams_list:
+    if all_teams_list:
         selected_chart_team = st.selectbox(
             "Wybierz drużynę do analizy trendu:", all_teams_list
         )
@@ -573,4 +560,3 @@ with tab4:
         if st.button("Wyczyść cały rejestr"):
             save_json(HISTORY_FILE, [])
             st.rerun()
-         
