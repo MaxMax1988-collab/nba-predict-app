@@ -64,7 +64,6 @@ def save_json(filename, data):
 
 
 def run_autonomous_learning(teams_dict):
-    # Skanujemy dzisiaj oraz wczoraj, aby na 100% wyłapać zakończone mecze nocne z USA
     today = datetime.now()
     yesterday = today - timedelta(days=1)
     dates_to_check = [today.strftime("%Y%m%d"), yesterday.strftime("%Y%m%d")]
@@ -130,7 +129,6 @@ def run_autonomous_learning(teams_dict):
                                 error_logs[a_team]["off_corr"] += a_off_err * 0.1
                                 error_logs[a_team]["def_corr"] += a_def_err * 0.1
 
-                                # Zapis historii ewolucji dla wykresów
                                 date_key = datetime.now().strftime("%Y-%m-%d")
                                 for t, logs in [(h_team, error_logs[h_team]), (a_team, error_logs[a_team])]:
                                     if t not in evolution_history:
@@ -183,7 +181,6 @@ def fetch_nba_standings():
                 wins = int(get_stat("wins", 0))
                 losses = int(get_stat("losses", 0))
 
-                # POPRAWKA ESPN: Jeśli GP wynosi 0, ale wygrane/porażki są już w systemie
                 if gp == 0 and (wins + losses) > 0:
                     gp = wins + losses
 
@@ -231,7 +228,8 @@ def fetch_nba_standings():
 
 @st.cache_data(ttl=600)
 def fetch_live_odds(api_key):
-    url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h&oddsFormat=decimal"
+    # Pobieramy zarówno Moneyline (h2h) jak i Handicupy (spreads)
+    url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads&oddsFormat=decimal"
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
@@ -282,6 +280,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         "prob_home": prob_home,
         "prob_away": prob_away,
         "handicap": handicap,
+        "expected_diff": expected_diff,
     }
 
 
@@ -301,7 +300,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Uwzględnia zmęczenie B2B i model wieloczynnikowy)")
+    st.subheader("Nadchodzące mecze (Model Wieloczynnikowy + Safe Spreads)")
 
     if not live_odds_data:
         st.info("Brak meczów w Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -379,26 +378,34 @@ with tab1:
         st.info(
             "🧠 **Autonomiczne parametry spotkania:**\n\n"
             f"• **{matched_home} (Dom):** OFF: `{teams_dict[matched_home]['OFF_CORR']:+.2f}`"
-            f" | DEF: `{teams_dict[matched_home]['DEF_CORR']:+.2f}` | Zmęczenie:"
-            f" `{'⚡ B2B (-1.2 pkt)' if home_b2b else '🔋 Wypoczęty'}`\n"
+            f" | DEF: `{teams_dict[matched_home]['DEF_CORR']:+.2f}`\n"
             f"• **{matched_away} (Gość):** OFF: `{teams_dict[matched_away]['OFF_CORR']:+.2f}`"
-            f" | DEF: `{teams_dict[matched_away]['DEF_CORR']:+.2f}` | Zmęczenie:"
-            f" `{'⚡ B2B (-1.8 pkt)' if away_b2b else '🔋 Wypoczęty'}`"
+            f" | DEF: `{teams_dict[matched_away]['DEF_CORR']:+.2f}`"
         )
 
         st.markdown("---")
-        st.subheader("🎯 Kalkulator Value Betów (Kursy Bukmacherskie)")
+        st.subheader("🎯 Kalkulator Value Betów (Moneyline)")
 
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
+        spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
 
         if bookmakers:
-            outcomes = bookmakers[0].get("markets", [{}])[0].get("outcomes", [])
-            for out in outcomes:
-                if out.get("name") == h_name:
-                    bookie_h_odds = float(out.get("price", 1.9))
-                elif out.get("name") == a_name:
-                    bookie_a_odds = float(out.get("price", 1.9))
+            for bookie in bookmakers:
+                for market in bookie.get("markets", []):
+                    if market.get("key") == "h2h":
+                        for out in market.get("outcomes", []):
+                            if out.get("name") == h_name:
+                                bookie_h_odds = float(out.get("price", 1.9))
+                            elif out.get("name") == a_name:
+                                bookie_a_odds = float(out.get("price", 1.9))
+                    elif market.get("key") == "spreads":
+                        for out in market.get("outcomes", []):
+                            # Wyciągamy domyślną linię handicapu dla gospodarza
+                            if out.get("name") == h_name:
+                                spread_bookie_line = float(out.get("point", 0.0))
+                                spread_bookie_odds = float(out.get("price", 1.9))
+                                spread_team = matched_home
 
         fair_home = round(1 / res["prob_home"], 2)
         fair_away = round(1 / res["prob_away"], 2)
@@ -454,6 +461,70 @@ with tab1:
                     save_json(HISTORY_FILE, bet_history)
                     st.success("Zapisano do rejestru!")
 
+        # --- NOWA SEKCJA: HYBRYDOWY BEZPIECZNY HANDICAP ---
+        st.markdown("---")
+        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
+
+        # Obliczamy bezpieczny bufor modelu (odejmujemy 3.0 pkt od przewidywanej różnicy dla bezpieczeństwa)
+        raw_diff = res["expected_diff"]  # dodatnia = wygrywa gospodarz
+        safety_buffer = 3.0
+
+        if raw_diff > 0:
+            safe_model_spread = -(
+                abs(raw_diff) - safety_buffer
+            )  # np. model daje -5.5
+            recommended_pick = matched_home
+        else:
+            safe_model_spread = (
+                abs(raw_diff) - safety_buffer
+            )  # np. model daje +5.5
+            recommended_pick = matched_away
+
+        safe_model_spread = round(safe_model_spread * 2) / 2
+
+        st.write(
+            f"• **Przewidywana różnica punktowa modelu:** `{raw_diff:+.1f} pkt`"
+        )
+        st.write(
+            f"• **Rekomendowany bezpieczny handicap (z buforem 3 pkt):**"
+            f" **{recommended_pick} ({safe_model_spread:+.1f})**"
+        )
+
+        if spread_bookie_line != 0.0:
+            st.write(
+                f"• **Aktualna linia bukmachera ({spread_team}):**"
+                f" `{spread_bookie_line:+.1f}` (Kurs: `{spread_bookie_odds}`)"
+            )
+            # Ocena value na handicapie
+            if (
+                recommended_pick == matched_home
+                and spread_bookie_line > safe_model_spread
+            ):
+                st.success(
+                    "✅ **OKAZJA NA HANDICAP:** Bukmacher daje korzystniejszą"
+                    f" linię ({spread_bookie_line:+.1f}) niż nasza bezpieczna"
+                    f" kalkulacja ({safe_model_spread:+.1f})!"
+                )
+            elif (
+                recommended_pick == matched_away
+                and spread_bookie_line < safe_model_spread
+            ):
+                st.success(
+                    "✅ **OKAZJA NA HANDICAP:** Bukmacher daje korzystniejszą"
+                    f" linię ({spread_bookie_line:+.1f}) niż nasza bezpieczna"
+                    f" kalkulacja ({safe_model_spread:+.1f})!"
+                )
+            else:
+                st.info(
+                    "ℹ️ Linia bukmachera jest bliska kalkulacji modelu -"
+                    " brak wyraźnej anomalii."
+                )
+        else:
+            st.info(
+                "Brak dostępnych rynków handicapów (spreads) u bukmachera dla"
+                " tego spotkania."
+            )
+
 with tab2:
     st.subheader(
         f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)"
@@ -466,7 +537,7 @@ with tab2:
 with tab3:
     st.subheader("📈 Wykresy Ewolucji Formy (Atak & Obrona)")
     all_teams_list = sorted(list(teams_dict.keys()))
-    if all_teams_list:
+    if all_tags := all_teams_list:
         selected_chart_team = st.selectbox(
             "Wybierz drużynę do analizy trendu:", all_teams_list
         )
@@ -502,4 +573,4 @@ with tab4:
         if st.button("Wyczyść cały rejestr"):
             save_json(HISTORY_FILE, [])
             st.rerun()
-                                         
+         
