@@ -63,6 +63,67 @@ def save_json(filename, data):
         json.dump(data, f)
 
 
+def auto_settle_bets(bet_history):
+    # Funkcja skanuje ostatnie 5 dni w ESPN i automatycznie rozlicza oczekujące typy
+    pending_bets = [b for b in bet_history if b.get("status") == "Oczekujący"]
+    if not pending_bets:
+        return bet_history, False
+
+    today = datetime.now()
+    dates_to_check = [
+        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(5)
+    ]
+    updated = False
+
+    for date_str in dates_to_check:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                events = res.json().get("events", [])
+                for event in events:
+                    status_type = (
+                        event.get("status", {}).get("type", {}).get("completed", False)
+                    )
+                    if status_type:
+                        competitions = event.get("competitions", [])
+                        if competitions:
+                            comp = competitions[0]
+                            competitors = comp.get("competitors", [])
+                            h_team, a_team, h_score, a_score = None, None, 0, 0
+                            for c in competitors:
+                                t_name = c.get("team", {}).get("displayName", "")
+                                score = int(c.get("score", 0))
+                                if c.get("homeAway") == "home":
+                                    h_team = t_name
+                                    h_score = score
+                                else:
+                                    a_team = t_name
+                                    a_score = score
+
+                            if h_team and a_team:
+                                match_str = f"{a_team} @ {h_team}"
+                                for bet in pending_bets:
+                                    if bet.get("match") == match_str or (
+                                        a_team in bet.get("match", "")
+                                        and h_team in bet.get("match", "")
+                                    ):
+                                        winner = (
+                                            h_team if h_score > a_score else a_team
+                                        )
+                                        if bet.get("pick") == winner:
+                                            bet["status"] = "Wygrany"
+                                        else:
+                                            bet["status"] = "Przegrany"
+                                        bet["score"] = f"{a_score}:{h_score}"
+                                        updated = True
+        except Exception:
+            pass
+
+    return bet_history, updated
+
+
 def run_autonomous_learning(teams_dict):
     today = datetime.now()
     yesterday = today - timedelta(days=1)
@@ -237,9 +298,7 @@ def fetch_live_odds(api_key):
             return []
     except:
         return []
-
-
-def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
+                               def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
     a_off = away_team["AVG_PTS_FOR"]
@@ -289,6 +348,12 @@ teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
 bet_history = load_json(HISTORY_FILE, [])
+
+# Rozliczamy typy w tle przy starcie
+bet_history, bet_updated = auto_settle_bets(bet_history)
+if bet_updated:
+    save_json(HISTORY_FILE, bet_history)
+
 evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
 
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -549,14 +614,24 @@ with tab4:
         df_bets = pd.DataFrame(bet_history)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bet_history if b["status"] != "Oczekujący"]
+        settled = [b for b in bet_history if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b["status"] == "Wygrany"]
+            won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
-            roi = (((sum([b["odds"] for b in won]) - len(settled)) / len(settled))) * 100
-            st.metric("Skuteczność (Win Rate)", f"{win_rate:.1f}%")
-            st.metric("ROI", f"{roi:+.2f}%")
+            total_staked = len(settled)
+            total_returns = sum([b["odds"] for b in won])
+            roi = ((total_returns - total_staked) / total_staked) * 100
+
+            st.markdown("---")
+            c_r1, c_r2, c_r3 = st.columns(3)
+            with c_r1:
+                st.metric("Rozliczone Typy", f"{len(settled)} / {len(bet_history)}")
+            with c_r2:
+                st.metric("Skuteczność (Win Rate)", f"{win_rate:.1f}%")
+            with c_r3:
+                st.metric("ROI", f"{roi:+.2f}%")
 
         if st.button("Wyczyść cały rejestr"):
             save_json(HISTORY_FILE, [])
             st.rerun()
+    
