@@ -298,7 +298,8 @@ def fetch_live_odds(api_key):
             return []
     except:
         return []
-                               def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
+
+def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
     a_off = away_team["AVG_PTS_FOR"]
@@ -349,7 +350,6 @@ api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
 bet_history = load_json(HISTORY_FILE, [])
 
-# Rozliczamy typy w tle przy starcie
 bet_history, bet_updated = auto_settle_bets(bet_history)
 if bet_updated:
     save_json(HISTORY_FILE, bet_history)
@@ -634,4 +634,4 @@ with tab4:
         if st.button("Wyczyść cały rejestr"):
             save_json(HISTORY_FILE, [])
             st.rerun()
-    
+                
