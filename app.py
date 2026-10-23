@@ -504,7 +504,7 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-# --- PANEL BACKUPU W SIDEBARZE (Zabezpieczenie przed utratą typów) ---
+# --- PANEL BACKUPU W SIDEBARZE ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("💾 Kopia Zapasowa Typów")
 
@@ -543,7 +543,7 @@ if uploaded_backup is not None:
             st.rerun()
     except Exception as e:
         st.sidebar.error(f"Błąd wczytywania backupu: {e}")
-# -------------------------------------------------------------------
+# ---------------------------------
 
 init_db()
 teams_dict, season_year = fetch_nba_standings()
@@ -611,7 +611,6 @@ with tab1:
         raw_home = match_info["home_team"]
         raw_away = match_info["away_team"]
 
-        # BEZPIECZNE MAPOWANIE (Clippers vs Cavaliers fixed)
         matched_home = TEAM_NAME_MAPPING.get(raw_home, raw_home)
         matched_away = TEAM_NAME_MAPPING.get(raw_away, raw_away)
 
@@ -857,7 +856,6 @@ with tab4:
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status"] == "Wygrany") if "status" in b else [] # zabezpieczone
             won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
