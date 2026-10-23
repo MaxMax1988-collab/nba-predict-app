@@ -192,6 +192,8 @@ def fetch_nba_standings():
         res.raise_for_status()
         data = res.json()
 
+        error_logs = load_json(ERROR_LOG_FILE, {})
+
         for children in data.get("children", []):
             for entry in children.get("standings", {}).get("entries", []):
                 team_info = entry.get("team", {})
@@ -220,15 +222,29 @@ def fetch_nba_standings():
 
                 base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
 
+                team_errs = error_logs.get(
+                    team_name, {"off_corr": 0.0, "def_corr": 0.0}
+                )
+                off_corr = team_errs.get("off_corr", 0.0)
+                def_corr = team_errs.get("def_corr", 0.0)
+
+                adjusted_pts_for = round(avg_pts_for + off_corr, 1)
+                adjusted_pts_against = round(avg_pts_against + def_corr, 1)
+                net_rating = round(adjusted_pts_for - adjusted_pts_against, 2)
+
+                history_weight = round(max(0.1, 1.0 - (gp * 0.05)), 2)
+
                 teams_dict[team_name] = {
                     "TEAM_NAME": team_name,
                     "GP": gp,
                     "W": wins,
                     "L": losses,
-                    "AVG_PTS_FOR": avg_pts_for,
-                    "AVG_PTS_AGAINST": avg_pts_against,
-                    "NET_RATING": round(avg_pts_for - avg_pts_against, 2),
-                    "TOTAL_POWER": base_power,
+                    "AVG_PTS_FOR": adjusted_pts_for,
+                    "AVG_PTS_AGAINST": adjusted_pts_against,
+                    "NET_RATING": net_rating,
+                    "OFF_CORR": round(off_corr, 2),
+                    "DEF_CORR": round(def_corr, 2),
+                    "TOTAL_POWER": round(base_power * history_weight, 2),
                 }
 
         return teams_dict, season_year
@@ -249,11 +265,14 @@ def fetch_live_odds(api_key):
         return []
 
 
-def predict_matchup(home_team, away_team):
+def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
     a_off = away_team["AVG_PTS_FOR"]
     a_def = away_team["AVG_PTS_AGAINST"]
+
+    fatigue_home = -1.2 if home_b2b else 0.0
+    fatigue_away = -1.8 if away_b2b else 0.0
 
     net_diff = home_team["NET_RATING"] - away_team["NET_RATING"]
     power_diff = home_team["TOTAL_POWER"] - away_team["TOTAL_POWER"]
@@ -264,12 +283,14 @@ def predict_matchup(home_team, away_team):
         + (net_diff / 5)
         + (power_diff / 3)
         + (home_advantage / 2)
+        + fatigue_home
     )
     expected_away_pts = (
         (a_off + h_def) / 2
         - (net_diff / 5)
         - (power_diff / 3)
         - (home_advantage / 2)
+        + fatigue_away
     )
 
     expected_diff = expected_home_pts - expected_away_pts
@@ -295,20 +316,22 @@ teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
 
-# Automatyczne rozliczanie typów w tle (zabezpieczone try/except, nie blokuje startu)
 try:
     auto_settle_bets()
 except:
     pass
 
-tab1, tab2, tab3 = st.tabs([
+evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
+
+tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
-    "📊 Tabela Ligi",
+    "📊 Tabela Ligi & Korekty",
+    "📈 Wykresy Ewolucji Formy",
     "🎯 Rejestr Typów & ROI",
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze i Predykcje")
+    st.subheader("Nadchodzące mecze (Model Wieloczynnikowy + Safe Spreads)")
 
     if not live_odds_data:
         st.info("Brak meczów w Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -361,7 +384,15 @@ with tab1:
         if not matched_away:
             matched_away = list(teams_dict.keys())[1]
 
-        res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away])
+        home_b2b = False
+        away_b2b = False
+
+        res = predict_matchup(
+            teams_dict[matched_home],
+            teams_dict[matched_away],
+            home_b2b,
+            away_b2b,
+        )
 
         st.markdown("---")
         c1, c2, c3 = st.columns(3)
@@ -375,10 +406,22 @@ with tab1:
             st.metric(f"Szansa {matched_away} (Gość)", f"{res['prob_away']*100:.1f}%")
 
         st.markdown("---")
-        st.subheader("🎯 Kalkulator Value Betów i Handicapów")
+        st.info(
+            "🧠 **Autonomiczne parametry spotkania:**\n\n"
+            f"• **{matched_home} (Dom):** OFF:"
+            f" `{teams_dict[matched_home]['OFF_CORR']:+.2f}` | DEF:"
+            f" `{teams_dict[matched_home]['DEF_CORR']:+.2f}`\n"
+            f"• **{matched_away} (Gość):** OFF:"
+            f" `{teams_dict[matched_away]['OFF_CORR']:+.2f}` | DEF:"
+            f" `{teams_dict[matched_away]['DEF_CORR']:+.2f}`"
+        )
+
+        st.markdown("---")
+        st.subheader("🎯 Kalkulator Value Betów (Moneyline)")
 
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
+        spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
 
         if bookmakers:
             for bookie in bookmakers:
@@ -389,11 +432,31 @@ with tab1:
                                 bookie_h_odds = float(out.get("price", 1.9))
                             elif out.get("name") == a_name:
                                 bookie_a_odds = float(out.get("price", 1.9))
+                    elif market.get("key") == "spreads":
+                        for out in market.get("outcomes", []):
+                            if out.get("name") == h_name:
+                                spread_bookie_line = float(out.get("point", 0.0))
+                                spread_bookie_odds = float(out.get("price", 1.9))
+                                spread_team = matched_home
+
+        fair_home = round(1 / res["prob_home"], 2)
+        fair_away = round(1 / res["prob_away"], 2)
 
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             st.write(f"**{matched_home} (Gospodarz)**")
+            st.write(f"Kurs Sprawiedliwy (Model): **{fair_home}**")
+            st.write(
+                f"Kurs Bukmachera: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**"
+            )
+
             if bookie_h_odds > 0:
+                ev_h = (res["prob_home"] * bookie_h_odds) - 1
+                if ev_h > 0:
+                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}%")
+                else:
+                    st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
+
                 if st.button("➕ Zapisz typ gospodarza"):
                     save_bet(
                         datetime.now().strftime("%Y-%m-%d"),
@@ -406,7 +469,18 @@ with tab1:
 
         with col_b2:
             st.write(f"**{matched_away} (Gość)**")
+            st.write(f"Kurs Sprawiedliwy (Model): **{fair_away}**")
+            st.write(
+                f"Kurs Bukmachera: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**"
+            )
+
             if bookie_a_odds > 0:
+                ev_a = (res["prob_away"] * bookie_a_odds) - 1
+                if ev_a > 0:
+                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}%")
+                else:
+                    st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
+
                 if st.button("➕ Zapisz typ gościa"):
                     save_bet(
                         datetime.now().strftime("%Y-%m-%d"),
@@ -417,14 +491,89 @@ with tab1:
                     st.success("Zapisano do bazy danych!")
                     st.rerun()
 
+        st.markdown("---")
+        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
+
+        raw_diff = res["expected_diff"]
+        safety_buffer = 3.0
+
+        if raw_diff > 0:
+            model_margin = raw_diff
+            recommended_team = matched_home
+            safe_spread = -(model_margin - safety_buffer)
+        else:
+            model_margin = abs(raw_diff)
+            recommended_team = matched_away
+            safe_spread = -(model_margin - safety_buffer)
+
+        safe_spread = round(safe_spread * 2) / 2
+
+        st.write(
+            f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla"
+            f" **{recommended_team}**"
+        )
+        st.write(
+            f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):**"
+            f" **{recommended_team} ({safe_spread:+.1f})**"
+        )
+
+        if spread_bookie_line != 0.0:
+            if spread_team == recommended_team:
+                bookie_team_spread = spread_bookie_line
+            else:
+                bookie_team_spread = -spread_bookie_line
+
+            st.write(
+                f"• **Aktualna linia bukmachera dla {recommended_team}:**"
+                f" `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)"
+            )
+
+            if bookie_team_spread > safe_spread:
+                st.success(
+                    f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię"
+                    f" ({bookie_team_spread:+.1f}) dla {recommended_team}!"
+                )
+            else:
+                st.info(
+                    "ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego"
+                    " zapasu."
+                )
+        else:
+            st.info(
+                "Brak dostępnych rynków handicapów (spreads) u bukmachera dla"
+                " tego spotkania."
+            )
+
 with tab2:
-    st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year}")
+    st.subheader(
+        f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)"
+    )
     if teams_dict:
         df = pd.DataFrame(list(teams_dict.values()))
+        df = df.sort_values(by="TEAM_NAME").reset_index(drop=True)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("🎯 Rejestr Typów i Automatyczne ROI")
+    st.subheader("📈 Wykresy Ewolucji Formy (Atak & Obrona)")
+    all_teams_list = sorted(list(teams_dict.keys()))
+    if all_teams_list:
+        selected_chart_team = st.selectbox(
+            "Wybierz drużynę do analizy trendu:", all_teams_list
+        )
+        team_history_data = evolution_history.get(selected_chart_team, [])
+
+        if not team_history_data:
+            st.info(
+                "Brak zapisanej historii ewolucji dla tej drużyny. Wykresy"
+                " pojawią się po rozegraniu i przetworzeniu pierwszych meczów."
+            )
+        else:
+            df_chart = pd.DataFrame(team_history_data)
+            df_chart.set_index("date", inplace=True)
+            st.line_chart(df_chart)
+
+with tab4:
+    st.subheader("🎯 Rejestr Typów i Automatyczna Analityka ROI")
     bets = load_bets()
     if not bets:
         st.info("Brak zapisanych typów w bazie danych.")
