@@ -47,62 +47,112 @@ HISTORICAL_POWER_RATINGS = {
     "Washington Wizards": -4.0,
 }
 
+TEAM_NAME_MAPPING = {
+    "Los Angeles Lakers": "Los Angeles Lakers",
+    "LA Lakers": "Los Angeles Lakers",
+    "Los Angeles Clippers": "Los Angeles Clippers",
+    "LA Clippers": "Los Angeles Clippers",
+    "Golden State Warriors": "Golden State Warriors",
+    "Boston Celtics": "Boston Celtics",
+    "Oklahoma City Thunder": "Oklahoma City Thunder",
+    "Denver Nuggets": "Denver Nuggets",
+    "New York Knicks": "New York Knicks",
+    "Minnesota Timberwolves": "Minnesota Timberwolves",
+    "Dallas Mavericks": "Dallas Mavericks",
+    "Milwaukee Bucks": "Milwaukee Bucks",
+    "Philadelphia 76ers": "Philadelphia 76ers",
+    "Cleveland Cavaliers": "Cleveland Cavaliers",
+    "Indiana Pacers": "Indiana Pacers",
+    "Orlando Magic": "Orlando Magic",
+    "Phoenix Suns": "Phoenix Suns",
+    "Memphis Grizzlies": "Memphis Grizzlies",
+    "Sacramento Kings": "Sacramento Kings",
+    "Miami Heat": "Miami Heat",
+    "New Orleans Pelicans": "New Orleans Pelicans",
+    "San Antonio Spurs": "San Antonio Spurs",
+    "Chicago Bulls": "Chicago Bulls",
+    "Houston Rockets": "Houston Rockets",
+    "Atlanta Hawks": "Atlanta Hawks",
+    "Toronto Raptors": "Toronto Raptors",
+    "Utah Jazz": "Utah Jazz",
+    "Brooklyn Nets": "Brooklyn Nets",
+    "Charlotte Hornets": "Charlotte Hornets",
+    "Portland Trail Blazers": "Portland Trail Blazers",
+    "Detroit Pistons": "Detroit Pistons",
+    "Washington Wizards": "Washington Wizards",
+}
+
+
+def get_canonical_team_name(name):
+    return TEAM_NAME_MAPPING.get(name, name)
+
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS bets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            match TEXT,
-            pick TEXT,
-            odds REAL,
-            status TEXT,
-            score TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT,
+                    match TEXT,
+                    pick TEXT,
+                    odds REAL,
+                    status TEXT,
+                    score TEXT
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        st.error(f"Błąd inicjalizacji bazy danych: {e}")
 
 
 def load_bets():
     init_db()
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM bets", conn)
-    conn.close()
-    return df.to_dict("records")
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            df = pd.read_sql_query("SELECT * FROM bets", conn)
+            return df.to_dict("records")
+    except Exception as e:
+        st.error(f"Błąd ładowania zakładów: {e}")
+        return []
 
 
 def save_bet(date, match, pick, odds):
     init_db()
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO bets (date, match, pick, odds, status, score) VALUES"
-        " (?, ?, ?, ?, 'Oczekujący', '')",
-        (date, match, pick, odds),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO bets (date, match, pick, odds, status, score) VALUES (?, ?, ?, ?, 'Oczekujący', '')",
+                (date, match, pick, odds),
+            )
+            conn.commit()
+    except Exception as e:
+        st.error(f"Błąd zapisu zakładu: {e}")
 
 
 def update_bet_status(bet_id, status, score):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE bets SET status = ?, score = ? WHERE id = ?", (status, score, bet_id)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE bets SET status = ?, score = ? WHERE id = ?",
+                (status, score, bet_id),
+            )
+            conn.commit()
+    except Exception as e:
+        st.error(f"Błąd aktualizacji statusu zakładu: {e}")
 
 
 def clear_bets():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM bets")
-    conn.commit()
-    conn.close()
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM bets")
+            conn.commit()
+    except Exception as e:
+        st.error(f"Błąd czyszczenia bazy: {e}")
 
 
 def load_json(filename, default):
@@ -110,14 +160,38 @@ def load_json(filename, default):
         try:
             with open(filename, "r") as f:
                 return json.load(f)
-        except:
+        except Exception:
             return default
     return default
 
 
 def save_json(filename, data):
-    with open(filename, "w") as f:
-        json.dump(data, f)
+    try:
+        with open(filename, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        st.error(f"Błąd zapisu pliku JSON ({filename}): {e}")
+
+
+def record_team_evolution(team_name, off_corr, def_corr):
+    history = load_json(EVOLUTION_HISTORY_FILE, {})
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    if team_name not in history:
+        history[team_name] = []
+
+    history[team_name] = [
+        entry for entry in history[team_name] if entry.get("date") != today_str
+    ]
+
+    history[team_name].append(
+        {
+            "date": today_str,
+            "OFF_CORR": round(off_corr, 2),
+            "DEF_CORR": round(def_corr, 2),
+        }
+    )
+    save_json(EVOLUTION_HISTORY_FILE, history)
 
 
 def auto_settle_bets():
@@ -135,7 +209,7 @@ def auto_settle_bets():
         url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
         headers = {"User-Agent": "Mozilla/5.0"}
         try:
-            res = requests.get(url, headers=headers, timeout=3)
+            res = requests.get(url, headers=headers, timeout=5)
             if res.status_code == 200:
                 events = res.json().get("events", [])
                 for event in events:
@@ -159,26 +233,51 @@ def auto_settle_bets():
                                     a_score = score
 
                             if h_team and a_team:
-                                match_str = f"{a_team} @ {h_team}"
                                 for bet in pending_bets:
-                                    if bet.get("match") == match_str or (
-                                        a_team in bet.get("match", "")
-                                        and h_team in bet.get("match", "")
+                                    match_str = bet.get("match", "")
+                                    if (
+                                        a_team in match_str
+                                        and h_team in match_str
                                     ):
-                                        winner = (
-                                            h_team if h_score > a_score else a_team
-                                        )
-                                        new_status = (
-                                            "Wygrany"
-                                            if bet.get("pick") == winner
-                                            else "Przegrany"
-                                        )
+                                        pick = bet.get("pick")
+                                        # Obsługa rozliczania Moneyline oraz Over/Under
+                                        if "Over" in pick or "Under" in pick:
+                                            total_points = h_score + a_score
+                                            # Przykładowy format picka: "Over 225.5"
+                                            try:
+                                                parts = pick.split(" ")
+                                                line_val = float(parts[1])
+                                                is_over = parts[0] == "Over"
+                                                won_cond = (
+                                                    total_points > line_val
+                                                    if is_over
+                                                    else total_points < line_val
+                                                )
+                                                new_status = (
+                                                    "Wygrany"
+                                                    if won_cond
+                                                    else "Przegrany"
+                                                )
+                                            except:
+                                                new_status = "Oczekujący"
+                                        else:
+                                            winner = (
+                                                h_team
+                                                if h_score > a_score
+                                                else a_team
+                                            )
+                                            new_status = (
+                                                "Wygrany"
+                                                if pick == winner
+                                                else "Przegrany"
+                                            )
+
                                         score_str = f"{a_score}:{h_score}"
                                         update_bet_status(
                                             bet["id"], new_status, score_str
                                         )
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"Nie udało się automatycznie rozliczyć zakładów: {e}")
 
 
 @st.cache_data(ttl=1800)
@@ -222,7 +321,6 @@ def fetch_nba_standings():
                 if avg_pts_against == 0.0:
                     avg_pts_against = 112.0
 
-                # ZABEZPIECZENIE WCZESNOSEZONOWE (Regresja do średniej ligowej 112.0 pkt)
                 if gp < 5:
                     weight = gp / 5.0
                     avg_pts_for = (weight * avg_pts_for) + (
@@ -258,23 +356,45 @@ def fetch_nba_standings():
                     "DEF_CORR": round(def_corr, 2),
                     "TOTAL_POWER": round(base_power * history_weight, 2),
                 }
+                record_team_evolution(team_name, off_corr, def_corr)
 
         return teams_dict, season_year
     except Exception as e:
+        st.error(f"Błąd pobierania tabeli NBA z ESPN: {e}")
         return {}, season_year
 
 
 @st.cache_data(ttl=300)
 def fetch_live_odds(api_key):
-    url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads&oddsFormat=decimal"
+    if not api_key:
+        return []
+    # Pobieramy również rynek totals (over/under)
+    url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
     try:
         res = requests.get(url, timeout=5)
         if res.status_code == 200:
             return res.json()
         else:
             return []
-    except:
+    except Exception:
         return []
+
+
+def check_if_team_played_yesterday(team_name):
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={yesterday}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        res = requests.get(url, headers=headers, timeout=3)
+        if res.status_code == 200:
+            events = res.json().get("events", [])
+            for event in events:
+                name = event.get("name", "")
+                if team_name in name:
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
@@ -305,6 +425,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         + fatigue_away
     )
 
+    expected_total_pts = expected_home_pts + expected_away_pts
     expected_diff = expected_home_pts - expected_away_pts
     prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     prob_home = max(0.12, min(0.88, prob_home))
@@ -314,6 +435,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     return {
         "home_pts": round(expected_home_pts, 1),
         "away_pts": round(expected_away_pts, 1),
+        "total_pts": round(expected_total_pts, 1),
         "prob_home": prob_home,
         "prob_away": prob_away,
         "handicap": handicap,
@@ -321,16 +443,37 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     }
 
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor")
+def calculate_kelly_stake(bankroll, probability, odds):
+    if odds <= 1.0:
+        return 0.0
+    q = 1.0 - probability
+    kelly_fraction = (probability * odds - 1.0) / (odds - 1.0)
+    # Stosujemy bezpieczny ułamek Kelly'ego (np. 1/4 Kelly, żeby ograniczyć wahania kapitału)
+    safe_kelly = max(0.0, kelly_fraction * 0.25)
+    return round(bankroll * safe_kelly, 2)
+
+
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Full Edition)")
+
+default_api_key = (
+    st.secrets.get("ODDS_API_KEY", "") if hasattr(st, "secrets") else ""
+)
+with st.sidebar:
+    st.header("⚙️ Konfiguracja & Kapitał")
+    api_key_input = st.text_input(
+        "The Odds API Key", value=default_api_key, type="password"
+    )
+    bankroll = st.number_input(
+        "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
+    )
 
 init_db()
 teams_dict, season_year = fetch_nba_standings()
-api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
 
 try:
     auto_settle_bets()
-except:
+except Exception:
     pass
 
 evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
@@ -343,10 +486,14 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Model Wieloczynnikowy + Safe Spreads)")
+    st.subheader(
+        "Nadchodzące mecze (Moneyline, Handicap, Over/Under & Kelly Stake)"
+    )
 
     if not live_odds_data:
-        st.info("Brak meczów w Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
+        st.info(
+            "Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:"
+        )
         all_teams = sorted(list(teams_dict.keys()))
         if all_teams:
             c1, c2 = st.columns(2)
@@ -365,7 +512,8 @@ with tab1:
                 )
                 st.write(
                     f"Szansa {manual_home} (Dom): {res['prob_home']*100:.1f}% | Szansa"
-                    f" {manual_away} (Gość): {res['prob_away']*100:.1f}%"
+                    f" {manual_away} (Gość): {res['prob_away']*100:.1f}% | Suma"
+                    f" pkt: {res['total_pts']}"
                 )
     else:
         match_labels = []
@@ -381,23 +529,36 @@ with tab1:
         match_idx = match_labels.index(selected_match_label)
         match_info = live_odds_data[match_idx]
 
-        h_name = match_info["home_team"]
-        a_name = match_info["away_team"]
+        h_name = get_canonical_team_name(match_info["home_team"])
+        a_name = get_canonical_team_name(match_info["away_team"])
 
-        matched_home, matched_away = None, None
-        for t_name in teams_dict.keys():
-            if h_name.lower() in t_name.lower() or t_name.lower() in h_name.lower():
-                matched_home = t_name
-            if a_name.lower() in t_name.lower() or t_name.lower() in a_name.lower():
-                matched_away = t_name
+        matched_home = h_name if h_name in teams_dict else None
+        matched_away = a_name if a_name in teams_dict else None
+
+        if not matched_home:
+            for t_name in teams_dict.keys():
+                if (
+                    match_info["home_team"].lower() in t_name.lower()
+                    or t_name.lower() in match_info["home_team"].lower()
+                ):
+                    matched_home = t_name
+                    break
+        if not matched_away:
+            for t_name in teams_dict.keys():
+                if (
+                    match_info["away_team"].lower() in t_name.lower()
+                    or t_name.lower() in match_info["away_team"].lower()
+                ):
+                    matched_away = t_name
+                    break
 
         if not matched_home:
             matched_home = list(teams_dict.keys())[0]
         if not matched_away:
             matched_away = list(teams_dict.keys())[1]
 
-        home_b2b = False
-        away_b2b = False
+        home_b2b = check_if_team_played_yesterday(matched_home)
+        away_b2b = check_if_team_played_yesterday(matched_away)
 
         res = predict_matchup(
             teams_dict[matched_home],
@@ -407,49 +568,59 @@ with tab1:
         )
 
         st.markdown("---")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.metric(
                 "Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}"
             )
         with c2:
-            st.metric(f"Szansa {matched_home} (Dom)", f"{res['prob_home']*100:.1f}%")
+            st.metric(
+                "Szacowana Suma Pkt", f"{res['total_pts']} pkt"
+            )
         with c3:
-            st.metric(f"Szansa {matched_away} (Gość)", f"{res['prob_away']*100:.1f}%")
+            st.metric(f"Szansa {matched_home}", f"{res['prob_home']*100:.1f}%")
+        with c4:
+            st.metric(f"Szansa {matched_away}", f"{res['prob_away']*100:.1f}%")
 
         st.markdown("---")
-        st.info(
-            "🧠 **Autonomiczne parametry spotkania:**\n\n"
-            f"• **{matched_home} (Dom):** OFF:"
-            f" `{teams_dict[matched_home]['OFF_CORR']:+.2f}` | DEF:"
-            f" `{teams_dict[matched_home]['DEF_CORR']:+.2f}`\n"
-            f"• **{matched_away} (Gość):** OFF:"
-            f" `{teams_dict[matched_away]['OFF_CORR']:+.2f}` | DEF:"
-            f" `{teams_dict[matched_away]['DEF_CORR']:+.2f}`"
-        )
-
-        st.markdown("---")
-        st.subheader("🎯 Kalkulator Value Betów (Moneyline)")
+        st.subheader("🎯 Kalkulator Value Betów (Moneyline) + Stawka Kelly'ego")
 
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
         spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
+        total_bookie_line, total_over_odds, total_under_odds = 0.0, 1.9, 1.9
 
         if bookmakers:
             for bookie in bookmakers:
                 for market in bookie.get("markets", []):
                     if market.get("key") == "h2h":
                         for out in market.get("outcomes", []):
-                            if out.get("name") == h_name:
+                            if (
+                                out.get("name") == match_info["home_team"]
+                                or out.get("name") in matched_home
+                            ):
                                 bookie_h_odds = float(out.get("price", 1.9))
-                            elif out.get("name") == a_name:
+                            elif (
+                                out.get("name") == match_info["away_team"]
+                                or out.get("name") in matched_away
+                            ):
                                 bookie_a_odds = float(out.get("price", 1.9))
                     elif market.get("key") == "spreads":
                         for out in market.get("outcomes", []):
-                            if out.get("name") == h_name:
+                            if (
+                                out.get("name") == match_info["home_team"]
+                                or out.get("name") in matched_home
+                            ):
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
+                    elif market.get("key") == "totals":
+                        for out in market.get("outcomes", []):
+                            if out.get("name") == "Over":
+                                total_bookie_line = float(out.get("point", 220.0))
+                                total_over_odds = float(out.get("price", 1.9))
+                            elif out.get("name") == "Under":
+                                total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res["prob_home"], 2)
         fair_away = round(1 / res["prob_away"], 2)
@@ -457,15 +628,13 @@ with tab1:
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             st.write(f"**{matched_home} (Gospodarz)**")
-            st.write(f"Kurs Sprawiedliwy (Model): **{fair_home}**")
-            st.write(
-                f"Kurs Bukmachera: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**"
-            )
+            st.write(f"Kurs Sprawiedliwy: **{fair_home}** | Bukmacher: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**")
 
             if bookie_h_odds > 0:
                 ev_h = (res["prob_home"] * bookie_h_odds) - 1
+                kelly_stake_h = calculate_kelly_stake(bankroll, res["prob_home"], bookie_h_odds)
                 if ev_h > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}%")
+                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
@@ -481,15 +650,13 @@ with tab1:
 
         with col_b2:
             st.write(f"**{matched_away} (Gość)**")
-            st.write(f"Kurs Sprawiedliwy (Model): **{fair_away}**")
-            st.write(
-                f"Kurs Bukmachera: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**"
-            )
+            st.write(f"Kurs Sprawiedliwy: **{fair_away}** | Bukmacher: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**")
 
             if bookie_a_odds > 0:
                 ev_a = (res["prob_away"] * bookie_a_odds) - 1
+                kelly_stake_a = calculate_kelly_stake(bankroll, res["prob_away"], bookie_a_odds)
                 if ev_a > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}%")
+                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
@@ -502,6 +669,29 @@ with tab1:
                     )
                     st.success("Zapisano do bazy danych!")
                     st.rerun()
+
+        st.markdown("---")
+        st.subheader("📊 Analiza Rynku Over / Under (Suma Punktów)")
+        st.write(f"• **Szacowana suma punktów przez model:** `{res['total_pts']} pkt`")
+        if total_bookie_line > 0.0:
+            st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
+            diff_total = res["total_pts"] - total_bookie_line
+            if diff_total > 3.0:
+                st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
+                if st.button("➕ Zapisz typ OVER"):
+                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Over {total_bookie_line}", total_over_odds)
+                    st.success("Zapisano Over do bazy!")
+                    st.rerun()
+            elif diff_total < -3.0:
+                st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}** (Model przewiduje o {abs(diff_total):.1f} pkt mniej!)")
+                if st.button("➕ Zapisz typ UNDER"):
+                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Under {total_bookie_line}", total_under_odds)
+                    st.success("Zapisano Under do bazy!")
+                    st.rerun()
+            else:
+                st.info("ℹ️ Linia bukmachera jest bliska szacunkom modelu - brak wyraźnej przewagi.")
+        else:
+            st.info("Brak dostępnych rynków Total Points u bukmachera.")
 
         st.markdown("---")
         st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
@@ -535,11 +725,6 @@ with tab1:
             else:
                 bookie_team_spread = -spread_bookie_line
 
-            st.write(
-                f"• **Aktualna linia bukmachera dla {recommended_team}:**"
-                f" `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)"
-            )
-
             if bookie_team_spread > safe_spread:
                 st.success(
                     f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię"
@@ -550,11 +735,6 @@ with tab1:
                     "ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego"
                     " zapasu."
                 )
-        else:
-            st.info(
-                "Brak dostępnych rynków handicapów (spreads) u bukmachera dla"
-                " tego spotkania."
-            )
 
 with tab2:
     st.subheader(
@@ -576,8 +756,8 @@ with tab3:
 
         if not team_history_data:
             st.info(
-                "Brak zapisanej historii ewolucji dla tej drużyny. Wykresy"
-                " pojawią się po rozegraniu i przetworzeniu pierwszych meczów."
+                "Brak zapisanej historii ewolucji dla tej drużyny. Dane zbierają"
+                " się automatycznie przy pobieraniu tabeli."
             )
         else:
             df_chart = pd.DataFrame(team_history_data)
@@ -595,7 +775,7 @@ with tab4:
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status") == "Wygrany"]
+            won = [b for b in settled if b.get("status"] == "Wygrany")
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
@@ -612,7 +792,16 @@ with tab4:
             with c_r3:
                 st.metric("ROI", f"{roi:+.2f}%")
 
+        # Przycisk eksportu do CSV
+        csv_data = df_bets.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Pobierz historię zakładów (CSV)",
+            data=csv_data,
+            file_name="nba_bets_history.csv",
+            mime="text/csv",
+        )
+
         if st.button("Wyczyść całą bazę typów"):
             clear_bets()
             st.rerun()
-                      
+     
