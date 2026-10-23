@@ -201,12 +201,11 @@ def record_team_evolution(team_name, off_corr, def_corr):
 
 
 def update_model_weights_from_bets():
-    """Uczenie się na własnych typach: aktualizuje korekty OFF/DEF drużyn na podstawie rozliczonych zakładów."""
     bets = load_bets()
     settled_bets = [
         b
         for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     if not settled_bets:
         return
@@ -248,7 +247,7 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -277,7 +276,7 @@ def auto_settle_bets():
                             for c in competitors:
                                 t_name = c.get("team", {}).get("displayName", "")
                                 score = int(c.get("score", 0))
-                                if c.get("homeAway") == "home":
+                                if c.get("homeAway"] == "home":
                                     h_team = t_name
                                     h_score = score
                                 else:
@@ -572,32 +571,28 @@ with tab1:
         match_idx = match_labels.index(selected_match_label)
         match_info = live_odds_data[match_idx]
 
-        h_name = get_canonical_team_name(match_info["home_team"])
-        a_name = get_canonical_team_name(match_info["away_team"])
+        # POPRAWIONE: Precyzyjne dopasowanie nazw z mapowania zamiast niedokładnego `in`
+        raw_home = match_info["home_team"]
+        raw_away = match_info["away_team"]
 
-        matched_home = h_name if h_name in teams_dict else None
-        matched_away = a_name if a_name in teams_dict else None
+        matched_home = get_canonical_team_name(raw_home)
+        matched_away = get_canonical_team_name(raw_away)
 
-        if not matched_home:
+        # Awaryjne dopasowanie dokładne
+        if matched_home not in teams_dict:
             for t_name in teams_dict.keys():
-                if (
-                    match_info["home_team"].lower() in t_name.lower()
-                    or t_name.lower() in match_info["home_team"].lower()
-                ):
+                if raw_home.lower() == t_name.lower():
                     matched_home = t_name
                     break
-        if not matched_away:
+        if matched_away not in teams_dict:
             for t_name in teams_dict.keys():
-                if (
-                    match_info["away_team"].lower() in t_name.lower()
-                    or t_name.lower() in match_info["away_team"].lower()
-                ):
+                if raw_away.lower() == t_name.lower():
                     matched_away = t_name
                     break
 
-        if not matched_home:
+        if matched_home not in teams_dict:
             matched_home = list(teams_dict.keys())[0]
-        if not matched_away:
+        if matched_away not in teams_dict:
             matched_away = list(teams_dict.keys())[1]
 
         home_b2b = check_if_team_played_yesterday(matched_home)
@@ -636,33 +631,26 @@ with tab1:
         if bookmakers:
             for bookie in bookmakers:
                 for market in bookie.get("markets", []):
-                    if market.get("key") == "h2h":
+                    if market.get("key"] == "h2h":
                         for out in market.get("outcomes", []):
-                            if (
-                                out.get("name") == match_info["home_team"]
-                                or out.get("name") in matched_home
-                            ):
+                            out_name = out.get("name")
+                            if get_canonical_team_name(out_name) == matched_home or out_name == raw_home:
                                 bookie_h_odds = float(out.get("price", 1.9))
-                            elif (
-                                out.get("name") == match_info["away_team"]
-                                or out.get("name") in matched_away
-                            ):
+                            elif get_canonical_team_name(out_name) == matched_away or out_name == raw_away:
                                 bookie_a_odds = float(out.get("price", 1.9))
-                    elif market.get("key") == "spreads":
+                    elif market.get("key"] == "spreads":
                         for out in market.get("outcomes", []):
-                            if (
-                                out.get("name") == match_info["home_team"]
-                                or out.get("name") in matched_home
-                            ):
+                            out_name = out.get("name")
+                            if get_canonical_team_name(out_name) == matched_home or out_name == raw_home:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
-                    elif market.get("key") == "totals":
+                    elif market.get("key"] == "totals":
                         for out in market.get("outcomes", []):
-                            if out.get("name") == "Over":
+                            if out.get("name"] == "Over":
                                 total_bookie_line = float(out.get("point", 220.0))
                                 total_over_odds = float(out.get("price", 1.9))
-                            elif out.get("name") == "Under":
+                            elif out.get("name"] == "Under":
                                 total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res["prob_home"], 2)
@@ -776,7 +764,7 @@ with tab1:
             else:
                 st.info(
                     "ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego"
-                    " zapasos."
+                    " zapasu."
                 )
 
 with tab2:
@@ -816,7 +804,7 @@ with tab4:
         df_bets = pd.DataFrame(bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
             won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
