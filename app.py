@@ -64,7 +64,6 @@ def save_json(filename, data):
 
 
 def auto_settle_bets(bet_history):
-    # Funkcja skanuje ostatnie 5 dni w ESPN i automatycznie rozlicza oczekujące typy
     pending_bets = [b for b in bet_history if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return bet_history, False
@@ -175,20 +174,34 @@ def run_autonomous_learning(teams_dict):
                                 h_expected_off = teams_dict[h_team]["AVG_PTS_FOR"]
                                 a_expected_off = teams_dict[a_team]["AVG_PTS_FOR"]
 
-                                h_off_err = (h_score - h_expected_off) * 0.05
-                                a_off_err = (a_score - a_expected_off) * 0.05
+                                # Delikatniejszy krok uczenia
+                                h_off_err = (h_score - h_expected_off) * 0.02
+                                a_off_err = (a_score - a_expected_off) * 0.02
 
                                 h_expected_def = teams_dict[h_team]["AVG_PTS_AGAINST"]
                                 a_expected_def = teams_dict[a_team]["AVG_PTS_AGAINST"]
 
-                                h_def_err = (a_score - h_expected_def) * 0.05
-                                a_def_err = (h_score - a_expected_def) * 0.05
+                                h_def_err = (a_score - h_expected_def) * 0.02
+                                a_def_err = (h_score - a_expected_def) * 0.02
 
-                                error_logs[h_team]["off_corr"] += h_off_err * 0.1
-                                error_logs[h_team]["def_corr"] += h_def_err * 0.1
+                                error_logs[h_team]["off_corr"] += h_off_err
+                                error_logs[h_team]["def_corr"] += h_def_err
+                                error_logs[a_team]["off_corr"] += a_off_err
+                                error_logs[a_team]["def_corr"] += a_def_err
 
-                                error_logs[a_team]["off_corr"] += a_off_err * 0.1
-                                error_logs[a_team]["def_corr"] += a_def_err * 0.1
+                                # BEZPIECZNY LIMIT (CLAMPING) - Wagi nie mogą przekroczyć +/- 5.0 pkt!
+                                error_logs[h_team]["off_corr"] = max(
+                                    -5.0, min(5.0, error_logs[h_team]["off_corr"])
+                                )
+                                error_logs[h_team]["def_corr"] = max(
+                                    -5.0, min(5.0, error_logs[h_team]["def_corr"])
+                                )
+                                error_logs[a_team]["off_corr"] = max(
+                                    -5.0, min(5.0, error_logs[a_team]["off_corr"])
+                                )
+                                error_logs[a_team]["def_corr"] = max(
+                                    -5.0, min(5.0, error_logs[a_team]["def_corr"])
+                                )
 
                                 date_key = datetime.now().strftime("%Y-%m-%d")
                                 for t, logs in [(h_team, error_logs[h_team]), (a_team, error_logs[a_team])]:
@@ -299,6 +312,7 @@ def fetch_live_odds(api_key):
     except:
         return []
 
+
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
@@ -348,11 +362,16 @@ st.title("🏀 Advanced Multi-Factor NBA Predictor")
 teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
-bet_history = load_json(HISTORY_FILE, [])
 
-bet_history, bet_updated = auto_settle_bets(bet_history)
+# Używamy st.session_state dla rejestru, aby typy nie znikały przy restarcie sesji
+if "bet_history" not in st.session_state:
+    st.session_state.bet_history = load_json(HISTORY_FILE, [])
+
+st.session_state.bet_history, bet_updated = auto_settle_bets(
+    st.session_state.bet_history
+)
 if bet_updated:
-    save_json(HISTORY_FILE, bet_history)
+    save_json(HISTORY_FILE, st.session_state.bet_history)
 
 evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
 
@@ -489,14 +508,14 @@ with tab1:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
                 if st.button("➕ Zapisz typ gospodarza"):
-                    bet_history.append({
+                    st.session_state.bet_history.append({
                         "date": datetime.now().strftime("%Y-%m-%d"),
                         "match": f"{matched_away} @ {matched_home}",
                         "pick": matched_home,
                         "odds": bookie_h_odds,
                         "status": "Oczekujący",
                     })
-                    save_json(HISTORY_FILE, bet_history)
+                    save_json(HISTORY_FILE, st.session_state.bet_history)
                     st.success("Zapisano do rejestru!")
 
         with col_b2:
@@ -514,14 +533,14 @@ with tab1:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
                 if st.button("➕ Zapisz typ gościa"):
-                    bet_history.append({
+                    st.session_state.bet_history.append({
                         "date": datetime.now().strftime("%Y-%m-%d"),
                         "match": f"{matched_away} @ {matched_home}",
                         "pick": matched_away,
                         "odds": bookie_a_odds,
                         "status": "Oczekujący",
                     })
-                    save_json(HISTORY_FILE, bet_history)
+                    save_json(HISTORY_FILE, st.session_state.bet_history)
                     st.success("Zapisano do rejestru!")
 
         st.markdown("---")
@@ -608,13 +627,15 @@ with tab3:
 
 with tab4:
     st.subheader("🎯 Rejestr Typów i Skuteczność (ROI)")
-    if not bet_history:
+    if not st.session_state.bet_history:
         st.info("Brak zapisanych typów w rejestrze.")
     else:
-        df_bets = pd.DataFrame(bet_history)
+        df_bets = pd.DataFrame(st.session_state.bet_history)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bet_history if b.get("status") != "Oczekujący"]
+        settled = [
+            b for b in st.session_state.bet_history if b.get("status") != "Oczekujący"
+        ]
         if settled:
             won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
@@ -625,13 +646,16 @@ with tab4:
             st.markdown("---")
             c_r1, c_r2, c_r3 = st.columns(3)
             with c_r1:
-                st.metric("Rozliczone Typy", f"{len(settled)} / {len(bet_history)}")
+                st.metric(
+                    "Rozliczone Typy",
+                    f"{len(settled)} / {len(st.session_state.bet_history)}",
+                )
             with c_r2:
                 st.metric("Skuteczność (Win Rate)", f"{win_rate:.1f}%")
             with c_r3:
                 st.metric("ROI", f"{roi:+.2f}%")
 
         if st.button("Wyczyść cały rejestr"):
+            st.session_state.bet_history = []
             save_json(HISTORY_FILE, [])
             st.rerun()
-                
