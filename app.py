@@ -506,3 +506,4 @@ with tab4:
             st.session_state.bet_history = []
             save_json(HISTORY_FILE, [])
             st.rerun()
+        
