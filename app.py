@@ -69,8 +69,9 @@ def auto_settle_bets(bet_history):
         return bet_history, False
 
     today = datetime.now()
+    # Sprawdzamy tylko wczoraj i dzisiaj dla szybkości startu
     dates_to_check = [
-        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(5)
+        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(2)
     ]
     updated = False
 
@@ -78,7 +79,7 @@ def auto_settle_bets(bet_history):
         url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
         headers = {"User-Agent": "Mozilla/5.0"}
         try:
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=3)
             if res.status_code == 200:
                 events = res.json().get("events", [])
                 for event in events:
@@ -138,7 +139,7 @@ def run_autonomous_learning(teams_dict):
         headers = {"User-Agent": "Mozilla/5.0"}
 
         try:
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=3)
             if res.status_code == 200:
                 data = res.json()
                 events = data.get("events", [])
@@ -174,7 +175,6 @@ def run_autonomous_learning(teams_dict):
                                 h_expected_off = teams_dict[h_team]["AVG_PTS_FOR"]
                                 a_expected_off = teams_dict[a_team]["AVG_PTS_FOR"]
 
-                                # Delikatniejszy krok uczenia
                                 h_off_err = (h_score - h_expected_off) * 0.02
                                 a_off_err = (a_score - a_expected_off) * 0.02
 
@@ -189,7 +189,6 @@ def run_autonomous_learning(teams_dict):
                                 error_logs[a_team]["off_corr"] += a_off_err
                                 error_logs[a_team]["def_corr"] += a_def_err
 
-                                # BEZPIECZNY LIMIT (CLAMPING) - Wagi nie mogą przekroczyć +/- 5.0 pkt!
                                 error_logs[h_team]["off_corr"] = max(
                                     -5.0, min(5.0, error_logs[h_team]["off_corr"])
                                 )
@@ -209,8 +208,8 @@ def run_autonomous_learning(teams_dict):
                                         evolution_history[t] = []
                                     evolution_history[t].append({
                                         "date": date_key,
-                                        "OFF_CORR": round(logs["off_corr"], 2),
-                                        "DEF_CORR": round(logs["def_corr"], 2),
+                                        "OFF_CORR": round(logs["OFF_CORR"] if "OFF_CORR" in logs else logs["off_corr"], 2),
+                                        "DEF_CORR": round(logs["DEF_CORR"] if "DEF_CORR" in logs else logs["def_corr"], 2),
                                     })
 
                                 processed_games.append(game_id)
@@ -233,7 +232,7 @@ def fetch_nba_standings():
 
     teams_dict = {}
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=5)
         res.raise_for_status()
         data = res.json()
 
@@ -296,15 +295,14 @@ def fetch_nba_standings():
 
         return teams_dict, season_year
     except Exception as e:
-        st.error(f"Błąd pobierania danych: {e}")
         return {}, season_year
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def fetch_live_odds(api_key):
     url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads&oddsFormat=decimal"
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=5)
         if res.status_code == 200:
             return res.json()
         else:
@@ -363,15 +361,18 @@ teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
 
-# Używamy st.session_state dla rejestru, aby typy nie znikały przy restarcie sesji
 if "bet_history" not in st.session_state:
     st.session_state.bet_history = load_json(HISTORY_FILE, [])
 
-st.session_state.bet_history, bet_updated = auto_settle_bets(
-    st.session_state.bet_history
-)
-if bet_updated:
-    save_json(HISTORY_FILE, st.session_state.bet_history)
+# Szybkie rozliczanie w tle bez blokowania UI
+try:
+    st.session_state.bet_history, bet_updated = auto_settle_bets(
+        st.session_state.bet_history
+    )
+    if bet_updated:
+        save_json(HISTORY_FILE, st.session_state.bet_history)
+except:
+    pass
 
 evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
 
@@ -460,10 +461,12 @@ with tab1:
         st.markdown("---")
         st.info(
             "🧠 **Autonomiczne parametry spotkania:**\n\n"
-            f"• **{matched_home} (Dom):** OFF: `{teams_dict[matched_home]['OFF_CORR']:+.2f}`"
-            f" | DEF: `{teams_dict[matched_home]['DEF_CORR']:+.2f}`\n"
-            f"• **{matched_away} (Gość):** OFF: `{teams_dict[matched_away]['OFF_CORR']:+.2f}`"
-            f" | DEF: `{teams_dict[matched_away]['DEF_CORR']:+.2f}`"
+            f"• **{matched_home} (Dom):** OFF:"
+            f" `{teams_dict[matched_home]['OFF_CORR']:+.2f}` | DEF:"
+            f" `{teams_dict[matched_home]['DEF_CORR']:+.2f}`\n"
+            f"• **{matched_away} (Gość):** OFF:"
+            f" `{teams_dict[matched_away]['OFF_CORR']:+.2f}` | DEF:"
+            f" `{teams_dict[matched_away]['DEF_CORR']:+.2f}`"
         )
 
         st.markdown("---")
@@ -637,7 +640,7 @@ with tab4:
             b for b in st.session_state.bet_history if b.get("status") != "Oczekujący"
         ]
         if settled:
-            won = [b for b in settled if b.get("status") == "Wygrany"]
+            won = [b for b in settled if b.get("status"] == "Wygrany")
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
@@ -659,3 +662,4 @@ with tab4:
             st.session_state.bet_history = []
             save_json(HISTORY_FILE, [])
             st.rerun()
+        
