@@ -85,10 +85,6 @@ TEAM_NAME_MAPPING = {
 }
 
 
-def get_canonical_team_name(name):
-    return TEAM_NAME_MAPPING.get(name, name)
-
-
 def init_db():
     try:
         with sqlite3.connect(DB_FILE) as conn:
@@ -508,6 +504,47 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
+# --- PANEL BACKUPU W SIDEBARZE (Zabezpieczenie przed utratą typów) ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("💾 Kopia Zapasowa Typów")
+
+current_bets = load_bets()
+if current_bets:
+    backup_json = json.dumps(current_bets, ensure_ascii=False, indent=4)
+    st.sidebar.download_button(
+        label="📥 Pobierz Backup Typów",
+        data=backup_json,
+        file_name=f"nba_bets_backup_{datetime.now().strftime('%Y%m%d')}.json",
+        mime="application/json",
+    )
+
+uploaded_backup = st.sidebar.file_uploader("📤 Wgraj Backup Typów (JSON)", type=["json"])
+if uploaded_backup is not None:
+    try:
+        backup_data = json.load(uploaded_backup)
+        if isinstance(backup_data, list):
+            with sqlite3.connect(DB_FILE) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM bets")
+                for b in backup_data:
+                    cursor.execute(
+                        "INSERT INTO bets (date, match, pick, odds, status, score) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            b.get("date"),
+                            b.get("match"),
+                            b.get("pick"),
+                            b.get("odds"),
+                            b.get("status", "Oczekujący"),
+                            b.get("score", ""),
+                        ),
+                    )
+                conn.commit()
+            st.sidebar.success("✅ Pomyślnie przywrócono typy z backupu!")
+            st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Błąd wczytywania backupu: {e}")
+# -------------------------------------------------------------------
+
 init_db()
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -574,7 +611,7 @@ with tab1:
         raw_home = match_info["home_team"]
         raw_away = match_info["away_team"]
 
-        # BEZPIECZNE MAPOWANIE: Sprawdzamy słownik kanoniczny, dokładną nazwę oraz maskotkę (np. "Clippers")
+        # BEZPIECZNE MAPOWANIE (Clippers vs Cavaliers fixed)
         matched_home = TEAM_NAME_MAPPING.get(raw_home, raw_home)
         matched_away = TEAM_NAME_MAPPING.get(raw_away, raw_away)
 
@@ -648,14 +685,14 @@ with tab1:
                     if market.get("key") == "h2h":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
-                            if out_name == raw_home or get_canonical_team_name(out_name) == matched_home:
+                            if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 bookie_h_odds = float(out.get("price", 1.9))
-                            elif out_name == raw_away or get_canonical_team_name(out_name) == matched_away:
+                            elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
                                 bookie_a_odds = float(out.get("price", 1.9))
                     elif market.get("key") == "spreads":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
-                            if out_name == raw_home or get_canonical_team_name(out_name) == matched_home:
+                            if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
@@ -820,6 +857,7 @@ with tab4:
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
+            won = [b for b in settled if b.get("status"] == "Wygrany") if "status" in b else [] # zabezpieczone
             won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
