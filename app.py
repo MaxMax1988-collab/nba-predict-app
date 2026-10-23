@@ -574,17 +574,18 @@ with tab1:
         raw_home = match_info["home_team"]
         raw_away = match_info["away_team"]
 
-        matched_home = get_canonical_team_name(raw_home)
-        matched_away = get_canonical_team_name(raw_away)
+        # BEZPIECZNE MAPOWANIE: Bezpośrednie pobieranie z mapowania lub dokładne dopasowanie
+        matched_home = TEAM_NAME_MAPPING.get(raw_home, raw_home)
+        matched_away = TEAM_NAME_MAPPING.get(raw_away, raw_away)
 
         if matched_home not in teams_dict:
             for t_name in teams_dict.keys():
-                if raw_home.lower() in t_name.lower() or t_name.lower() in raw_home.lower():
+                if raw_home.strip().lower() == t_name.strip().lower():
                     matched_home = t_name
                     break
         if matched_away not in teams_dict:
             for t_name in teams_dict.keys():
-                if raw_away.lower() in t_name.lower() or t_name.lower() in raw_away.lower():
+                if raw_away.strip().lower() == t_name.strip().lower():
                     matched_away = t_name
                     break
 
