@@ -240,10 +240,8 @@ def auto_settle_bets():
                                         and h_team in match_str
                                     ):
                                         pick = bet.get("pick")
-                                        # Obsługa rozliczania Moneyline oraz Over/Under
                                         if "Over" in pick or "Under" in pick:
                                             total_points = h_score + a_score
-                                            # Przykładowy format picka: "Over 225.5"
                                             try:
                                                 parts = pick.split(" ")
                                                 line_val = float(parts[1])
@@ -368,7 +366,6 @@ def fetch_nba_standings():
 def fetch_live_odds(api_key):
     if not api_key:
         return []
-    # Pobieramy również rynek totals (over/under)
     url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
     try:
         res = requests.get(url, timeout=5)
@@ -446,9 +443,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
 def calculate_kelly_stake(bankroll, probability, odds):
     if odds <= 1.0:
         return 0.0
-    q = 1.0 - probability
     kelly_fraction = (probability * odds - 1.0) / (odds - 1.0)
-    # Stosujemy bezpieczny ułamek Kelly'ego (np. 1/4 Kelly, żeby ograniczyć wahania kapitału)
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
@@ -775,7 +770,7 @@ with tab4:
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status"] == "Wygrany")
+            won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
@@ -792,7 +787,6 @@ with tab4:
             with c_r3:
                 st.metric("ROI", f"{roi:+.2f}%")
 
-        # Przycisk eksportu do CSV
         csv_data = df_bets.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Pobierz historię zakładów (CSV)",
@@ -804,4 +798,3 @@ with tab4:
         if st.button("Wyczyść całą bazę typów"):
             clear_bets()
             st.rerun()
-     
