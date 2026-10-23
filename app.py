@@ -574,7 +574,6 @@ with tab1:
         raw_home = match_info["home_team"]
         raw_away = match_info["away_team"]
 
-        # BEZPIECZNE MAPOWANIE: Szukamy bezpośrednio w kluczach słownika teams_dict
         matched_home = get_canonical_team_name(raw_home)
         matched_away = get_canonical_team_name(raw_away)
 
@@ -633,7 +632,6 @@ with tab1:
                     if market.get("key") == "h2h":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
-                            # Rygorystyczne przypisanie kursów do właściwej drużyny gospodarza/gościa
                             if out_name == raw_home or get_canonical_team_name(out_name) == matched_home:
                                 bookie_h_odds = float(out.get("price", 1.9))
                             elif out_name == raw_away or get_canonical_team_name(out_name) == matched_away:
@@ -806,7 +804,7 @@ with tab4:
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status"] == "Wygrany")
+            won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
