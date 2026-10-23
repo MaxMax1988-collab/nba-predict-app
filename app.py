@@ -14,6 +14,8 @@ DB_FILE = "nba_bets.db"
 ERROR_LOG_FILE = "model_errors_multi.json"
 EVOLUTION_HISTORY_FILE = "evolution_history.json"
 
+DEFAULT_API_KEY = "5f16c049cc0baccae587e0f50116f255"
+
 HISTORICAL_POWER_RATINGS = {
     "Boston Celtics": 4.5,
     "Oklahoma City Thunder": 4.0,
@@ -112,10 +114,12 @@ def load_bets():
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM bets", conn)
-            return df.to_dict("records")
+            bets_list = df.to_dict("records")
+            if bets_list:
+                st.session_state["cached_bets"] = bets_list
+            return bets_list
     except Exception as e:
-        st.error(f"Błąd ładowania zakładów: {e}")
-        return []
+        return st.session_state.get("cached_bets", [])
 
 
 def save_bet(date, match, pick, odds):
@@ -151,6 +155,8 @@ def clear_bets():
             cursor = conn.cursor()
             cursor.execute("DELETE FROM bets")
             conn.commit()
+        if "cached_bets" in st.session_state:
+            st.session_state["cached_bets"] = []
     except Exception as e:
         st.error(f"Błąd czyszczenia bazy: {e}")
 
@@ -192,6 +198,52 @@ def record_team_evolution(team_name, off_corr, def_corr):
         }
     )
     save_json(EVOLUTION_HISTORY_FILE, history)
+
+
+def update_model_weights_from_bets():
+    """Uczenie się na własnych typach: aktualizuje korekty OFF/DEF drużyn na podstawie rozliczonych zakładów."""
+    bets = load_bets()
+    settled_bets = [
+        b
+        for b in bets
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+    ]
+    if not settled_bets:
+        return
+
+    error_logs = load_json(ERROR_LOG_FILE, {})
+
+    for bet in settled_bets:
+        match = bet.get("match", "")
+        pick = bet.get("pick", "")
+        status = bet.get("status", "")
+        score_str = bet.get("score", "")
+
+        if "@" not in match or ":" not in score_str:
+            continue
+
+        try:
+            parts_match = match.split(" @ ")
+            a_team = parts_match[0].strip()
+            h_team = parts_match[1].strip()
+        except:
+            continue
+
+        lr = 0.1
+        if h_team not in error_logs:
+            error_logs[h_team] = {"off_corr": 0.0, "def_corr": 0.0}
+        if a_team not in error_logs:
+            error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
+
+        if status == "Przegrany":
+            if pick == h_team:
+                error_logs[h_team]["off_corr"] -= lr
+                error_logs[a_team]["def_corr"] += lr
+            elif pick == a_team:
+                error_logs[a_team]["off_corr"] -= lr
+                error_logs[h_team]["def_corr"] += lr
+
+    save_json(ERROR_LOG_FILE, error_logs)
 
 
 def auto_settle_bets():
@@ -450,17 +502,12 @@ def calculate_kelly_stake(bankroll, probability, odds):
 
 st.title("🏀 Advanced Multi-Factor NBA Predictor (Full Edition)")
 
-default_api_key = (
-    st.secrets.get("ODDS_API_KEY", "") if hasattr(st, "secrets") else ""
+api_key_input = st.sidebar.text_input(
+    "The Odds API Key", value=DEFAULT_API_KEY, type="password"
 )
-with st.sidebar:
-    st.header("⚙️ Konfiguracja & Kapitał")
-    api_key_input = st.text_input(
-        "The Odds API Key", value=default_api_key, type="password"
-    )
-    bankroll = st.number_input(
-        "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
-    )
+bankroll = st.sidebar.number_input(
+    "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
+)
 
 init_db()
 teams_dict, season_year = fetch_nba_standings()
@@ -468,6 +515,7 @@ live_odds_data = fetch_live_odds(api_key_input)
 
 try:
     auto_settle_bets()
+    update_model_weights_from_bets()
 except Exception:
     pass
 
@@ -728,7 +776,7 @@ with tab1:
             else:
                 st.info(
                     "ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego"
-                    " zapasu."
+                    " zapasos."
                 )
 
 with tab2:
