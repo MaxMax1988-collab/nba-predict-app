@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import os
 import pandas as pd
@@ -11,7 +11,6 @@ st.set_page_config(
 
 HISTORY_FILE = "bet_history.json"
 ERROR_LOG_FILE = "model_errors_multi.json"
-PROCESSED_GAMES_FILE = "processed_games.json"
 EVOLUTION_HISTORY_FILE = "evolution_history.json"
 
 HISTORICAL_POWER_RATINGS = {
@@ -61,165 +60,6 @@ def load_json(filename, default):
 def save_json(filename, data):
     with open(filename, "w") as f:
         json.dump(data, f)
-
-
-def auto_settle_bets(bet_history):
-    pending_bets = [b for b in bet_history if b.get("status") == "Oczekujący"]
-    if not pending_bets:
-        return bet_history, False
-
-    today = datetime.now()
-    dates_to_check = [
-        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(2)
-    ]
-    updated = False
-
-    for date_str in dates_to_check:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        try:
-            res = requests.get(url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                events = res.json().get("events", [])
-                for event in events:
-                    status_type = (
-                        event.get("status", {}).get("type", {}).get("completed", False)
-                    )
-                    if status_type:
-                        competitions = event.get("competitions", [])
-                        if competitions:
-                            comp = competitions[0]
-                            competitors = comp.get("competitors", [])
-                            h_team, a_team, h_score, a_score = None, None, 0, 0
-                            for c in competitors:
-                                t_name = c.get("team", {}).get("displayName", "")
-                                score = int(c.get("score", 0))
-                                if c.get("homeAway") == "home":
-                                    h_team = t_name
-                                    h_score = score
-                                else:
-                                    a_team = t_name
-                                    a_score = score
-
-                            if h_team and a_team:
-                                match_str = f"{a_team} @ {h_team}"
-                                for bet in pending_bets:
-                                    if bet.get("match") == match_str or (
-                                        a_team in bet.get("match", "")
-                                        and h_team in bet.get("match", "")
-                                    ):
-                                        winner = (
-                                            h_team if h_score > a_score else a_team
-                                        )
-                                        if bet.get("pick") == winner:
-                                            bet["status"] = "Wygrany"
-                                        else:
-                                            bet["status"] = "Przegrany"
-                                        bet["score"] = f"{a_score}:{h_score}"
-                                        updated = True
-        except Exception:
-            pass
-
-    return bet_history, updated
-
-
-def run_autonomous_learning(teams_dict):
-    today = datetime.now()
-    yesterday = today - timedelta(days=1)
-    dates_to_check = [today.strftime("%Y%m%d"), yesterday.strftime("%Y%m%d")]
-
-    processed_games = load_json(PROCESSED_GAMES_FILE, [])
-    error_logs = load_json(ERROR_LOG_FILE, {})
-    evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
-    updated = False
-
-    for date_str in dates_to_check:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-
-        try:
-            res = requests.get(url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                events = data.get("events", [])
-                for event in events:
-                    game_id = event.get("id")
-                    status_type = (
-                        event.get("status", {}).get("type", {}).get("completed", False)
-                    )
-
-                    if status_type and game_id not in processed_games:
-                        competitions = event.get("competitions", [])
-                        if competitions:
-                            comp = competitions[0]
-                            competitors = comp.get("competitors", [])
-                            h_team, a_team, h_score, a_score = None, None, 0, 0
-
-                            for comp_det in competitors:
-                                t_name = comp_det.get("team", {}).get("displayName", "")
-                                score = int(comp_det.get("score", 0))
-                                if comp_det.get("homeAway") == "home":
-                                    h_team = t_name
-                                    h_score = score
-                                else:
-                                    a_team = t_name
-                                    a_score = score
-
-                            if h_team and a_team and h_team in teams_dict and a_team in teams_dict:
-                                if h_team not in error_logs:
-                                    error_logs[h_team] = {"off_corr": 0.0, "def_corr": 0.0}
-                                if a_team not in error_logs:
-                                    error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
-
-                                h_expected_off = teams_dict[h_team]["AVG_PTS_FOR"]
-                                a_expected_off = teams_dict[a_team]["AVG_PTS_FOR"]
-
-                                h_off_err = (h_score - h_expected_off) * 0.02
-                                a_off_err = (a_score - a_expected_off) * 0.02
-
-                                h_expected_def = teams_dict[h_team]["AVG_PTS_AGAINST"]
-                                a_expected_def = teams_dict[a_team]["AVG_PTS_AGAINST"]
-
-                                h_def_err = (a_score - h_expected_def) * 0.02
-                                a_def_err = (h_score - a_expected_def) * 0.02
-
-                                error_logs[h_team]["off_corr"] += h_off_err
-                                error_logs[h_team]["def_corr"] += h_def_err
-                                error_logs[a_team]["off_corr"] += a_off_err
-                                error_logs[a_team]["def_corr"] += a_def_err
-
-                                error_logs[h_team]["off_corr"] = max(
-                                    -5.0, min(5.0, error_logs[h_team]["off_corr"])
-                                )
-                                error_logs[h_team]["def_corr"] = max(
-                                    -5.0, min(5.0, error_logs[h_team]["def_corr"])
-                                )
-                                error_logs[a_team]["off_corr"] = max(
-                                    -5.0, min(5.0, error_logs[a_team]["off_corr"])
-                                )
-                                error_logs[a_team]["def_corr"] = max(
-                                    -5.0, min(5.0, error_logs[a_team]["def_corr"])
-                                )
-
-                                date_key = datetime.now().strftime("%Y-%m-%d")
-                                for t, logs in [(h_team, error_logs[h_team]), (a_team, error_logs[a_team])]:
-                                    if t not in evolution_history:
-                                        evolution_history[t] = []
-                                    evolution_history[t].append({
-                                        "date": date_key,
-                                        "OFF_CORR": round(logs["OFF_CORR"] if "OFF_CORR" in logs else logs["off_corr"], 2),
-                                        "DEF_CORR": round(logs["DEF_CORR"] if "DEF_CORR" in logs else logs["def_corr"], 2),
-                                    })
-
-                                processed_games.append(game_id)
-                                updated = True
-        except Exception:
-            pass
-
-    if updated:
-        save_json(ERROR_LOG_FILE, error_logs)
-        save_json(PROCESSED_GAMES_FILE, processed_games)
-        save_json(EVOLUTION_HISTORY_FILE, evolution_history)
 
 
 @st.cache_data(ttl=1800)
@@ -289,8 +129,6 @@ def fetch_nba_standings():
                     "DEF_CORR": round(def_corr, 2),
                     "TOTAL_POWER": round(base_power * history_weight, 2),
                 }
-
-        run_autonomous_learning(teams_dict)
 
         return teams_dict, season_year
     except Exception as e:
@@ -362,15 +200,6 @@ live_odds_data = fetch_live_odds(api_key_input)
 
 if "bet_history" not in st.session_state:
     st.session_state.bet_history = load_json(HISTORY_FILE, [])
-
-try:
-    st.session_state.bet_history, bet_updated = auto_settle_bets(
-        st.session_state.bet_history
-    )
-    if bet_updated:
-        save_json(HISTORY_FILE, st.session_state.bet_history)
-except:
-    pass
 
 evolution_history = load_json(EVOLUTION_HISTORY_FILE, {})
 
@@ -618,8 +447,7 @@ with tab3:
         if not team_history_data:
             st.info(
                 "Brak zapisanej historii ewolucji dla tej drużyny. Wykresy"
-                " pojawią się po rozegraniu i przetworzeniu pierwszych meczów"
-                " przez pętlę w tle."
+                " pojawią się po rozegraniu i przetworzeniu pierwszych meczów."
             )
         else:
             df_chart = pd.DataFrame(team_history_data)
@@ -660,3 +488,4 @@ with tab4:
             st.session_state.bet_history = []
             save_json(HISTORY_FILE, [])
             st.rerun()
+    
