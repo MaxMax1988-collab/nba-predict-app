@@ -69,7 +69,6 @@ def auto_settle_bets(bet_history):
         return bet_history, False
 
     today = datetime.now()
-    # Sprawdzamy tylko wczoraj i dzisiaj dla szybkości startu
     dates_to_check = [
         (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(2)
     ]
@@ -364,7 +363,6 @@ live_odds_data = fetch_live_odds(api_key_input)
 if "bet_history" not in st.session_state:
     st.session_state.bet_history = load_json(HISTORY_FILE, [])
 
-# Szybkie rozliczanie w tle bez blokowania UI
 try:
     st.session_state.bet_history, bet_updated = auto_settle_bets(
         st.session_state.bet_history
@@ -640,7 +638,7 @@ with tab4:
             b for b in st.session_state.bet_history if b.get("status") != "Oczekujący"
         ]
         if settled:
-            won = [b for b in settled if b.get("status"] == "Wygrany")
+            won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
@@ -662,4 +660,3 @@ with tab4:
             st.session_state.bet_history = []
             save_json(HISTORY_FILE, [])
             st.rerun()
-        
