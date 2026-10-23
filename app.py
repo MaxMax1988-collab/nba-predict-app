@@ -198,6 +198,7 @@ teams_dict, season_year = fetch_nba_standings()
 api_key_input = "5f16c049cc0baccae587e0f50116f255"
 live_odds_data = fetch_live_odds(api_key_input)
 
+# Bezpieczne ładowanie rejestru do pamięci sesji
 if "bet_history" not in st.session_state:
     st.session_state.bet_history = load_json(HISTORY_FILE, [])
 
@@ -459,8 +460,25 @@ with tab4:
     if not st.session_state.bet_history:
         st.info("Brak zapisanych typów w rejestrze.")
     else:
+        # Tabela do zarządzania / edycji statusów typów z poziomu interfejsu
         df_bets = pd.DataFrame(st.session_state.bet_history)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
+
+        st.markdown("### ✏️ Ręczne rozliczanie typów (dla pełnej kontroli analityki)")
+        for idx, bet in enumerate(st.session_state.bet_history):
+            if bet.get("status") == "Oczekujący":
+                cols = st.columns([3, 1, 1])
+                cols.write(
+                    f"**{bet['match']}** | Typ: `{bet['pick']}` (Kurs: `{bet['odds']}`)"
+                )
+                if cols.button("✅ Wygrany", key=f"win_{idx}"):
+                    st.session_state.bet_history[idx]["status"] = "Wygrany"
+                    save_json(HISTORY_FILE, st.session_state.bet_history)
+                    st.rerun()
+                if cols.button("❌ Przegrany", key=f"loss_{idx}"):
+                    st.session_state.bet_history[idx]["status"] = "Przegrany"
+                    save_json(HISTORY_FILE, st.session_state.bet_history)
+                    st.rerun()
 
         settled = [
             b for b in st.session_state.bet_history if b.get("status") != "Oczekujący"
@@ -488,4 +506,3 @@ with tab4:
             st.session_state.bet_history = []
             save_json(HISTORY_FILE, [])
             st.rerun()
-    
