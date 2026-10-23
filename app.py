@@ -155,7 +155,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     if not settled_bets:
         return
@@ -530,6 +530,8 @@ with tab1:
 
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
+        spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
+        total_bookie_line, total_over_odds, total_under_odds = 0.0, 1.9, 1.9
 
         if bookmakers:
             for bookie in bookmakers:
@@ -541,6 +543,20 @@ with tab1:
                                 bookie_h_odds = float(out.get("price", 1.9))
                             elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
                                 bookie_a_odds = float(out.get("price", 1.9))
+                    elif market.get("key") == "spreads":
+                        for out in market.get("outcomes", []):
+                            out_name = out.get("name")
+                            if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
+                                spread_bookie_line = float(out.get("point", 0.0))
+                                spread_bookie_odds = float(out.get("price", 1.9))
+                                spread_team = matched_home
+                    elif market.get("key") == "totals":
+                        for out in market.get("outcomes", []):
+                            if out.get("name") == "Over":
+                                total_bookie_line = float(out.get("point", 220.0))
+                                total_over_odds = float(out.get("price", 1.9))
+                            elif out.get("name") == "Under":
+                                total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res["prob_home"], 2)
         fair_away = round(1 / res["prob_away"], 2)
@@ -580,6 +596,60 @@ with tab1:
                     st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
 
+        st.markdown("---")
+        st.subheader("📊 Analiza Rynku Over / Under (Suma Punktów)")
+        st.write(f"• **Szacowana suma punktów przez model:** `{res['total_pts']} pkt`")
+        if total_bookie_line > 0.0:
+            st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
+            diff_total = res["total_pts"] - total_bookie_line
+            if diff_total > 3.0:
+                st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
+                if st.button("➕ Zapisz typ OVER"):
+                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Over {total_bookie_line}", total_over_odds)
+                    st.success("Zapisano Over do bazy!")
+                    st.rerun()
+            elif diff_total < -3.0:
+                st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}** (Model przewiduje o {abs(diff_total):.1f} pkt mniej!)")
+                if st.button("➕ Zapisz typ UNDER"):
+                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Under {total_bookie_line}", total_under_odds)
+                    st.success("Zapisano Under do bazy!")
+                    st.rerun()
+            else:
+                st.info("ℹ️ Linia bukmachera jest bliska szacunkom modelu - brak wyraźnej przewagi.")
+        else:
+            st.info("Brak dostępnych rynków Total Points u bukmachera.")
+
+        st.markdown("---")
+        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
+
+        raw_diff = res["expected_diff"]
+        safety_buffer = 3.0
+
+        if raw_diff > 0:
+            model_margin = raw_diff
+            recommended_team = matched_home
+            safe_spread = -(model_margin - safety_buffer)
+        else:
+            model_margin = abs(raw_diff)
+            recommended_team = matched_away
+            safe_spread = -(model_margin - safety_buffer)
+
+        safe_spread = round(safe_spread * 2) / 2
+
+        st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
+        st.write(f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):** **{recommended_team} ({safe_spread:+.1f})**")
+
+        if spread_bookie_line != 0.0:
+            if spread_team == recommended_team:
+                bookie_team_spread = spread_bookie_line
+            else:
+                bookie_team_spread = -spread_bookie_line
+
+            if bookie_team_spread > safe_spread:
+                st.success(f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię ({bookie_team_spread:+.1f}) dla {recommended_team}!")
+            else:
+                st.info("ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego zapasu.")
+
 with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
     if teams_dict:
@@ -596,9 +666,9 @@ with tab3:
         df_bets = pd.DataFrame(bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status") == "Wygrany"]
+            won = [b for b in settled if b.get("status"] == "Wygrany")
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
