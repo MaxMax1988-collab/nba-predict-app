@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+import json
+import os
 import sqlite3
 import pandas as pd
 import requests
@@ -219,6 +221,16 @@ def fetch_nba_standings():
                 avg_pts_against = get_stat("avgPointsAgainst", 112.0)
                 if avg_pts_against == 0.0:
                     avg_pts_against = 112.0
+
+                # ZABEZPIECZENIE WCZESNOSEZONOWE (Regresja do średniej ligowej 112.0 pkt)
+                if gp < 5:
+                    weight = gp / 5.0
+                    avg_pts_for = (weight * avg_pts_for) + (
+                        (1 - weight) * 112.0
+                    )
+                    avg_pts_against = (weight * avg_pts_against) + (
+                        (1 - weight) * 112.0
+                    )
 
                 base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
 
@@ -603,3 +615,4 @@ with tab4:
         if st.button("Wyczyść całą bazę typów"):
             clear_bets()
             st.rerun()
+                      
