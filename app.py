@@ -133,8 +133,8 @@ def load_model_weights():
         weights_dict = {}
         for row in res.data:
             weights_dict[row["team_name"]] = {
-                "off_corr": row.get("off_corr", 0.0),
-                "def_corr": row.get("def_corr", 0.0)
+                "off_corr": float(row.get("off_corr", 0.0)),
+                "def_corr": float(row.get("def_corr", 0.0))
             }
         return weights_dict
     except Exception:
@@ -145,8 +145,8 @@ def save_model_weights(weights_dict):
         for team_name, vals in weights_dict.items():
             supabase.table("model_weights").upsert({
                 "team_name": team_name,
-                "off_corr": vals.get("off_corr", 0.0),
-                "def_corr": vals.get("def_corr", 0.0)
+                "off_corr": round(vals.get("off_corr", 0.0), 2),
+                "def_corr": round(vals.get("def_corr", 0.0), 2)
             }).execute()
     except Exception as e:
         st.error(f"Błąd zapisu wag do Supabase: {e}")
@@ -155,12 +155,11 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
-    if not settled_bets:
-        return
-
-    error_logs = load_model_weights()
+    
+    # Budujemy słownik wag od zera na podstawie wszystkich rozliczonych zakładów (stabilne przeliczenie)
+    error_logs = {}
 
     for bet in settled_bets:
         match = bet.get("match", "")
@@ -196,7 +195,7 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -666,7 +665,7 @@ with tab3:
         df_bets = pd.DataFrame(bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
             won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
