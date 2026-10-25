@@ -159,7 +159,7 @@ def update_model_weights_from_bets():
     ]
     
     error_logs = {}
-    lr = 0.3  # Zwiększony współczynnik nauki do 0.3 dla szybszej adaptacji
+    lr = 0.3  # Szybszy współczynnik nauki 0.3
 
     for bet in settled_bets:
         match = bet.get("match", "")
@@ -182,7 +182,7 @@ def update_model_weights_from_bets():
         if a_team not in error_logs:
             error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
-        # Obsługa typów Moneyline
+        # Obsługa Moneyline
         if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
             if pick == h_team:
                 error_logs[h_team]["off_corr"] -= lr
@@ -191,18 +191,16 @@ def update_model_weights_from_bets():
                 error_logs[a_team]["off_corr"] -= lr
                 error_logs[h_team]["def_corr"] += lr
 
-        # Nowość: Bezpośrednia nauka dla rynków Over / Under
+        # Nauka dla rynków Over / Under
         elif status == "Przegrany" and ("Over" in pick or "Under" in pick):
             try:
                 parts_score = score_str.split(":")
                 actual_total = float(parts_score[0]) + float(parts_score[1])
                 line_val = float(pick.split(" ")[1])
                 
-                # Jeśli model dał Under, a wszedł wysoki Over -> podbijamy ofensywę obu drużyn
                 if "Under" in pick and actual_total > line_val:
                     error_logs[h_team]["off_corr"] += lr
                     error_logs[a_team]["off_corr"] += lr
-                # Jeśli model dał Over, a mecz był underowy -> obniżamy ofensywę
                 elif "Over" in pick and actual_total < line_val:
                     error_logs[h_team]["off_corr"] -= lr
                     error_logs[a_team]["off_corr"] -= lr
@@ -379,11 +377,21 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
+# --- ZAAWANSOWANA FUNKCJA PREDYKCJI Z DYNAMICZNYM PACE & MATCHUP RATING ---
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
     a_off = away_team["AVG_PTS_FOR"]
     a_def = away_team["AVG_PTS_AGAINST"]
+
+    # 1. Obliczenie szacunkowego tempa meczu (Pace Adjustment)
+    league_avg_total = 224.0
+    combined_team_pace = (h_off + h_def + a_off + a_def) / 2.0
+    pace_delta = (combined_team_pace - league_avg_total) * 0.45
+
+    # 2. Wykrywanie skrajnych Mismatchów (Mocny atak vs Słaba obrona)
+    home_mismatch_bonus = max(0.0, (h_off - a_def) * 0.3)
+    away_mismatch_bonus = max(0.0, (a_off - h_def) * 0.3)
 
     fatigue_home = -1.2 if home_b2b else 0.0
     fatigue_away = -1.8 if away_b2b else 0.0
@@ -398,6 +406,8 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         + (power_diff / 3)
         + (home_advantage / 2)
         + fatigue_home
+        + (pace_delta / 2)
+        + home_mismatch_bonus
     )
     expected_away_pts = (
         (a_off + h_def) / 2
@@ -405,6 +415,8 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         - (power_diff / 3)
         - (home_advantage / 2)
         + fatigue_away
+        + (pace_delta / 2)
+        + away_mismatch_bonus
     )
 
     expected_total_pts = expected_home_pts + expected_away_pts
