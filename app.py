@@ -158,8 +158,8 @@ def update_model_weights_from_bets():
         if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
     ]
     
-    # Budujemy słownik wag od zera na podstawie wszystkich rozliczonych zakładów (stabilne przeliczenie)
     error_logs = {}
+    lr = 0.3  # Zwiększony współczynnik nauki do 0.3 dla szybszej adaptacji
 
     for bet in settled_bets:
         match = bet.get("match", "")
@@ -177,19 +177,37 @@ def update_model_weights_from_bets():
         except:
             continue
 
-        lr = 0.1
         if h_team not in error_logs:
             error_logs[h_team] = {"off_corr": 0.0, "def_corr": 0.0}
         if a_team not in error_logs:
             error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
-        if status == "Przegrany":
+        # Obsługa typów Moneyline
+        if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
             if pick == h_team:
                 error_logs[h_team]["off_corr"] -= lr
                 error_logs[a_team]["def_corr"] += lr
             elif pick == a_team:
                 error_logs[a_team]["off_corr"] -= lr
                 error_logs[h_team]["def_corr"] += lr
+
+        # Nowość: Bezpośrednia nauka dla rynków Over / Under
+        elif status == "Przegrany" and ("Over" in pick or "Under" in pick):
+            try:
+                parts_score = score_str.split(":")
+                actual_total = float(parts_score[0]) + float(parts_score[1])
+                line_val = float(pick.split(" ")[1])
+                
+                # Jeśli model dał Under, a wszedł wysoki Over -> podbijamy ofensywę obu drużyn
+                if "Under" in pick and actual_total > line_val:
+                    error_logs[h_team]["off_corr"] += lr
+                    error_logs[a_team]["off_corr"] += lr
+                # Jeśli model dał Over, a mecz był underowy -> obniżamy ofensywę
+                elif "Over" in pick and actual_total < line_val:
+                    error_logs[h_team]["off_corr"] -= lr
+                    error_logs[a_team]["off_corr"] -= lr
+            except:
+                pass
 
     save_model_weights(error_logs)
 
