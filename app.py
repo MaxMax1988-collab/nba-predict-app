@@ -95,20 +95,6 @@ TEAM_NAME_MAPPING = {
     "Washington Wizards": "Washington Wizards",
 }
 
-# --- MAPOWANIE ID DRUŻYN ESPN DLA ZAUTOMATYZOWANYCH PROPSÓW ---
-ESPN_TEAM_IDS = {
-    "Atlanta Hawks": "1", "Boston Celtics": "2", "New Orleans Pelicans": "3",
-    "Chicago Bulls": "4", "Cleveland Cavaliers": "5", "Dallas Mavericks": "6",
-    "Denver Nuggets": "7", "Detroit Pistons": "8", "Golden State Warriors": "9",
-    "Houston Rockets": "10", "Indiana Pacers": "11", "Los Angeles Clippers": "12",
-    "Los Angeles Lakers": "13", "Miami Heat": "14", "Milwaukee Bucks": "15",
-    "Minnesota Timberwolves": "16", "Brooklyn Nets": "17", "New York Knicks": "18",
-    "Orlando Magic": "19", "Philadelphia 76ers": "20", "Phoenix Suns": "21",
-    "Portland Trail Blazers": "22", "Sacramento Kings": "23", "San Antonio Spurs": "24",
-    "Oklahoma City Thunder": "25", "Utah Jazz": "26", "Washington Wizards": "27",
-    "Toronto Raptors": "28", "Memphis Grizzlies": "29", "Charlotte Hornets": "30"
-}
-
 # --- OPERACJE NA BAZIE SUPABASE ---
 def load_bets():
     try:
@@ -381,31 +367,42 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- AUTOMATYCZNE POBIERANIE ŻYWYCH PLAYER PROPS Z API ESPN ---
-@st.cache_data(ttl=1800)
-def fetch_live_player_props(team_name):
-    team_id = ESPN_TEAM_IDS.get(team_name)
-    if not team_id:
-        return [{"name": "Lider Zespołu", "pos": "G/F", "pts": 20.0}]
-    
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            athletes = data.get("athletes", [])
-            players_list = []
-            for group in athletes:
-                for item in group.get("items", []):
-                    name = item.get("displayName", "Nieznany")
-                    pos = item.get("position", {}).get("abbreviation", "G")
-                    # Pobieramy dynamiczne statystyki zawodnika z endpointu ESPN jeśli dostępne, w przeciwnym razie estymujemy z pozycji
-                    players_list.append({"name": name, "pos": pos, "pts": 18.5 if pos in ["PG", "SG", "SF"] else 12.0})
-            return players_list[:3] if players_list else [{"name": "Lider Zespołu", "pos": "G/F", "pts": 20.0}]
-    except Exception:
-        pass
-    return [{"name": "Lider Zespołu", "pos": "G/F", "pts": 20.0}]
+# --- PROFESJONALNA BAZA PRAWDZIWYCH LIDERÓW DLA WSZYSTKICH 30 DRUŻYN NBA ---
+ALL_TEAM_PLAYERS = {
+    "Atlanta Hawks": [{"name": "Trae Young", "pos": "PG", "pts": 25.7, "ast": 10.8}, {"name": "Jalen Johnson", "pos": "PF", "pts": 16.0, "reb": 8.7}],
+    "Boston Celtics": [{"name": "Jayson Tatum", "pos": "SF", "pts": 26.9, "reb": 8.1}, {"name": "Jaylen Brown", "pos": "SG", "pts": 23.0, "reb": 5.5}],
+    "Brooklyn Nets": [{"name": "Cam Thomas", "pos": "SG", "pts": 22.5, "reb": 3.2}, {"name": "Dennis Schroder", "pos": "PG", "pts": 14.0, "ast": 6.0}],
+    "Charlotte Hornets": [{"name": "LaMelo Ball", "pos": "PG", "pts": 23.9, "ast": 8.0}, {"name": "Miles Bridges", "pos": "PF", "pts": 21.0, "reb": 7.3}],
+    "Chicago Bulls": [{"name": "Coby White", "pos": "PG", "pts": 19.1, "ast": 5.1}, {"name": "Nikola Vucevic", "pos": "C", "pts": 18.0, "reb": 10.5}],
+    "Cleveland Cavaliers": [{"name": "Donovan Mitchell", "pos": "SG", "pts": 26.6, "ast": 6.1}, {"name": "Darius Garland", "pos": "PG", "pts": 18.1, "ast": 6.5}],
+    "Dallas Mavericks": [{"name": "Luka Doncic", "pos": "PG", "pts": 33.9, "reb": 9.2, "ast": 9.8}, {"name": "Kyrie Irving", "pos": "SG", "pts": 25.6, "ast": 5.2}],
+    "Denver Nuggets": [{"name": "Nikola Jokic", "pos": "C", "pts": 26.4, "reb": 12.4, "ast": 9.0}, {"name": "Jamal Murray", "pos": "PG", "pts": 21.2, "ast": 4.1}],
+    "Detroit Pistons": [{"name": "Cade Cunningham", "pos": "PG", "pts": 22.7, "ast": 7.5}, {"name": "Jalen Duren", "pos": "C", "pts": 13.8, "reb": 11.6}],
+    "Golden State Warriors": [{"name": "Stephen Curry", "pos": "PG", "pts": 26.4, "ast": 5.1}, {"name": "Jonathan Kuminga", "pos": "PF", "pts": 16.1, "reb": 4.8}],
+    "Houston Rockets": [{"name": "Alperen Sengun", "pos": "C", "pts": 21.1, "reb": 9.3}, {"name": "Jalen Green", "pos": "SG", "pts": 19.6, "reb": 5.2}],
+    "Indiana Pacers": [{"name": "Tyrese Haliburton", "pos": "PG", "pts": 20.1, "ast": 10.9}, {"name": "Pascal Siakam", "pos": "PF", "pts": 21.3, "reb": 7.8}],
+    "Los Angeles Clippers": [{"name": "Kawhi Leonard", "pos": "SF", "pts": 23.7, "reb": 6.1}, {"name": "James Harden", "pos": "PG", "pts": 16.6, "ast": 8.5}],
+    "Los Angeles Lakers": [{"name": "LeBron James", "pos": "SF", "pts": 25.7, "ast": 7.3}, {"name": "Anthony Davis", "pos": "C", "pts": 24.7, "reb": 12.6}],
+    "Memphis Grizzlies": [{"name": "Ja Morant", "pos": "PG", "pts": 25.1, "ast": 8.1}, {"name": "Jaren Jackson Jr.", "pos": "PF", "pts": 22.5, "reb": 5.5}],
+    "Miami Heat": [{"name": "Jimmy Butler", "pos": "SF", "pts": 20.8, "reb": 5.3}, {"name": "Bam Adebayo", "pos": "C", "pts": 19.3, "reb": 10.4}],
+    "Milwaukee Bucks": [{"name": "Giannis Antetokounmpo", "pos": "PF", "pts": 30.4, "reb": 11.5}, {"name": "Damian Lillard", "pos": "PG", "pts": 24.3, "ast": 7.0}],
+    "Minnesota Timberwolves": [{"name": "Anthony Edwards", "pos": "SG", "pts": 25.9, "reb": 5.4}, {"name": "Karl-Anthony Towns", "pos": "C", "pts": 21.8, "reb": 8.3}],
+    "New Orleans Pelicans": [{"name": "Zion Williamson", "pos": "PF", "pts": 22.9, "reb": 5.8}, {"name": "Brandon Ingram", "pos": "SF", "pts": 20.8, "ast": 5.7}],
+    "New York Knicks": [{"name": "Jalen Brunson", "pos": "PG", "pts": 28.7, "ast": 6.7}, {"name": "Julius Randle", "pos": "PF", "pts": 24.0, "reb": 9.2}],
+    "Oklahoma City Thunder": [{"name": "Shai Gilgeous-Alexander", "pos": "PG", "pts": 30.1, "ast": 6.2}, {"name": "Chet Holmgren", "pos": "C", "pts": 16.5, "reb": 7.9}],
+    "Orlando Magic": [{"name": "Paolo Banchero", "pos": "PF", "pts": 22.6, "reb": 6.9}, {"name": "Franz Wagner", "pos": "SF", "pts": 19.7, "reb": 5.3}],
+    "Philadelphia 76ers": [{"name": "Joel Embiid", "pos": "C", "pts": 34.7, "reb": 11.0}, {"name": "Tyrese Maxey", "pos": "PG", "pts": 25.9, "ast": 6.2}],
+    "Phoenix Suns": [{"name": "Kevin Durant", "pos": "PF", "pts": 27.1, "reb": 6.6}, {"name": "Devin Booker", "pos": "SG", "pts": 27.1, "ast": 6.9}],
+    "Portland Trail Blazers": [{"name": "Anfernee Simons", "pos": "SG", "pts": 22.6, "ast": 5.5}, {"name": "Jerami Grant", "pos": "PF", "pts": 21.0, "reb": 3.5}],
+    "Sacramento Kings": [{"name": "De'Aaron Fox", "pos": "PG", "pts": 26.6, "ast": 5.6}, {"name": "Domantas Sabonis", "pos": "C", "pts": 19.4, "reb": 13.7}],
+    "San Antonio Spurs": [{"name": "Victor Wembanyama", "pos": "C", "pts": 21.4, "reb": 10.6}, {"name": "Devin Vassell", "pos": "SG", "pts": 19.5, "ast": 4.1}],
+    "Toronto Raptors": [{"name": "Scottie Barnes", "pos": "SF", "pts": 19.9, "reb": 8.2}, {"name": "RJ Barrett", "pos": "SG", "pts": 20.8, "reb": 6.2}],
+    "Utah Jazz": [{"name": "Lauri Markkanen", "pos": "PF", "pts": 23.2, "reb": 8.2}, {"name": "Jordan Clarkson", "pos": "SG", "pts": 17.1, "ast": 3.4}],
+    "Washington Wizards": [{"name": "Kyle Kuzma", "pos": "PF", "pts": 22.2, "reb": 6.6}, {"name": "Jordan Poole", "pos": "SG", "pts": 17.4, "ast": 4.4}]
+}
+
+def get_player_props(team_name):
+    return ALL_TEAM_PLAYERS.get(team_name, [{"name": "Lider Zespołu", "pos": "G/F", "pts": 20.0, "reb": 5.0}])
 
 # --- DETERMINISTYCZNA ANALIZA SĘDZIÓW ---
 def get_referee_adjustment(match_label):
@@ -519,7 +516,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (Automated Live Studio)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Syndicate Master Edition)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -528,7 +525,7 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 Żywe API ESPN + Supabase + ML AKTYWNE")
+st.sidebar.success("🟢 System Syndykatowy w Pełni Sprawny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -547,7 +544,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze, Value Bety, Żywe Player Props & Sędziowie")
+    st.subheader("Nadchodzące mecze, Value Bety, Player Props & Sędziowie")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -715,20 +712,22 @@ with tab1:
             else:
                 st.info("ℹ️ Linia bukmachera bliska szacunkom modelu.")
 
-        # --- SEKCJA: ŻYWE PLAYER PROPS Z API ESPN ---
+        # --- SEKCJA: PLAYER PROPS DLA WSZYSTKICH 30 DRUŻYN ---
         st.markdown("---")
-        st.subheader("⭐ Żywe Player Props (Skład i Zawodnicy z API ESPN)")
+        st.subheader("⭐ Player Props (Liderzy Statystyczni)")
         col_p1, col_p2 = st.columns(2)
         with col_p1:
             st.markdown(f"**{matched_home}**")
-            home_players = fetch_live_player_props(matched_home)
+            home_players = get_player_props(matched_home)
             for p in home_players:
-                st.write(f"• **{p['name']}** ({p['pos']}) — Szacunek linii pkt: **~{p['pts']} pkt**")
+                extra_stat = f" | Zbiórki/Asysty: {p.get('reb', p.get('ast', 0))}" if ('reb' in p or 'ast' in p) else ""
+                st.write(f"• **{p['name']}** ({p['pos']}) — Średnia: **{p['pts']} pkt**{extra_stat}")
         with col_p2:
             st.markdown(f"**{matched_away}**")
-            away_players = fetch_live_player_props(matched_away)
+            away_players = get_player_props(matched_away)
             for p in away_players:
-                st.write(f"• **{p['name']}** ({p['pos']}) — Szacunek linii pkt: **~{p['pts']} pkt**")
+                extra_stat = f" | Zbiórki/Asysty: {p.get('reb', p.get('ast', 0))}" if ('reb' in p or 'ast' in p) else ""
+                st.write(f"• **{p['name']}** ({p['pos']}) — Średnia: **{p['pts']} pkt**{extra_stat}")
 
 with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year}")
@@ -788,7 +787,7 @@ with tab3:
 
 with tab4:
     st.subheader("🧠 Stan Samouczenia Modelu (Machine Learning)")
-    st.info("🤖 Silnik **scikit-learn (LogisticRegression)** + żywe API ESPN + Supabase działają w pełni automatycznie.")
+    st.info("🤖 Silnik **scikit-learn (LogisticRegression)** + Supabase działają w pełni.")
     
     error_logs_data = load_model_weights()
     if not error_logs_data:
@@ -804,3 +803,4 @@ with tab4:
         df_weights = pd.DataFrame(weights_list)
         df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
         st.dataframe(df_weights, use_container_width=True, hide_index=True)
+  
