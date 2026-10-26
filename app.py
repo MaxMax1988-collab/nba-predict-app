@@ -488,7 +488,7 @@ def predict_matchup(home_team, away_team, match_label="", home_b2b=False, away_b
         
         if len(settled_moneyline) >= 5:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
             ml_model = LogisticRegression()
             ml_model.fit(X_train, y_train)
             ml_boost = 0.02 * (ml_model.coef_[0][0] if hasattr(ml_model, 'coef_') else 0)
