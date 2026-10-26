@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="Advanced Multi-Factor NBA Predictor", page_icon="🏀", layout="wide"
 )
 
-DEFAULT_API_KEY = "5f16c049cc0baccae587e0f50116f255"
+DEFAULT_API_KEY = "62e230538ba5e8f6ff0aa80fcdbb481c"
 
 # --- INICJALIZACJA CHMURY SUPABASE ---
 @st.cache_resource
