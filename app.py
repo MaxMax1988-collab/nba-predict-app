@@ -6,9 +6,6 @@ import requests
 import streamlit as st
 from supabase import create_client, Client
 
-from sklearn.linear_model import LogisticRegression
-import numpy as np
-
 st.set_page_config(
     page_title="Advanced Multi-Factor NBA Predictor", page_icon="🏀", layout="wide"
 )
@@ -95,7 +92,7 @@ TEAM_NAME_MAPPING = {
     "Washington Wizards": "Washington Wizards",
 }
 
-# --- OPERACJE NA BAZIE SUPABASE ---
+# --- OPERACJE NA BAZIE CHMUROWEJ SUPABASE ---
 def load_bets():
     try:
         response = supabase.table("bets").select("*").order("id", desc=False).execute()
@@ -185,6 +182,7 @@ def update_model_weights_from_bets():
         if a_team not in error_logs:
             error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
+        # Obsługa Moneyline
         if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
             if pick == h_team:
                 error_logs[h_team]["off_corr"] -= lr
@@ -193,6 +191,7 @@ def update_model_weights_from_bets():
                 error_logs[a_team]["off_corr"] -= lr
                 error_logs[h_team]["def_corr"] += lr
 
+        # Nauka dla rynków Over / Under
         elif status == "Przegrany" and ("Over" in pick or "Under" in pick):
             try:
                 parts_score = score_str.split(":")
@@ -248,6 +247,7 @@ def auto_settle_bets():
                                     a_team = t_name
                                     a_score = score
 
+                            # Pobranie daty meczu z API ESPN (YYYY-MM-DD)
                             event_date_raw = event.get("date", "")[:10]
 
                             if h_team and a_team:
@@ -255,6 +255,7 @@ def auto_settle_bets():
                                     match_str = bet.get("match", "")
                                     bet_date = bet.get("date", "")
 
+                                    # ZABEZPIECZENIE: Dopasowanie nazw ORAZ zgodność daty zakładu z datą meczu
                                     if a_team in match_str and h_team in match_str and bet_date == event_date_raw:
                                         pick = bet.get("pick")
                                         if "Over" in pick or "Under" in pick:
@@ -382,16 +383,19 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
+# --- ZAAWANSOWANA FUNKCJA PREDYKCJI Z OFSETEM O/U ---
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
     a_off = away_team["AVG_PTS_FOR"]
     a_def = away_team["AVG_PTS_AGAINST"]
 
+    # 1. Obliczenie szacunkowego tempa meczu (Pace Adjustment)
     league_avg_total = 224.0
     combined_team_pace = (h_off + h_def + a_off + a_def) / 2.0
     pace_delta = (combined_team_pace - league_avg_total) * 0.45
 
+    # 2. Wykrywanie skrajnych Mismatchów (Mocny atak vs Słaba obrona)
     home_mismatch_bonus = max(0.0, (h_off - a_def) * 0.3)
     away_mismatch_bonus = max(0.0, (a_off - h_def) * 0.3)
 
@@ -426,25 +430,8 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     expected_total_pts = base_total + league_ou_offset
 
     expected_diff = expected_home_pts - expected_away_pts
-    base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
-    
-    # --- TUTAJ DZIAŁA SCIKIT-LEARN ---
-    try:
-        bets = load_bets()
-        settled_moneyline = [b for b in bets if b.get("status") in ["Wygrany", "Przegrany"] and not ("Over" in b.get("pick","") or "Under" in b.get("pick",""))]
-        
-        if len(settled_moneyline) >= 5:
-            X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
-            ml_model = LogisticRegression()
-            ml_model.fit(X_train, y_train)
-            ml_boost = 0.02 * (ml_model.coef_[0][0] if hasattr(ml_model, 'coef_') else 0)
-            prob_home = max(0.12, min(0.88, base_prob_home + ml_boost))
-        else:
-            prob_home = max(0.12, min(0.88, base_prob_home))
-    except Exception:
-        prob_home = max(0.12, min(0.88, base_prob_home))
-
+    prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
+    prob_home = max(0.12, min(0.88, prob_home))
     prob_away = 1 - prob_home
     handicap = -round(expected_diff * 2) / 2
 
@@ -465,7 +452,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (Pure ML Core)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Supabase Cloud Edition)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -474,7 +461,7 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 Skuteczny rdzeń (ESPN + Supabase + LogisticRegression) AKTYWNY")
+st.sidebar.success("🟢 Połączono z darmową bazą Supabase Cloud")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -488,12 +475,12 @@ except Exception:
 tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
-    "🎯 Rejestr Typów",
-    "🧠 Stan Samouczenia Modelu (ML)",
+    "🎯 Rejestr Typów & ROI",
+    "🧠 Stan Samouczenia Modelu",
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze, Value Bety & Analiza O/U")
+    st.subheader("Nadchodzące mecze (Moneyline, Handicap, Over/Under & Kelly Stake)")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -509,6 +496,10 @@ with tab1:
                 res = predict_matchup(teams_dict[manual_home], teams_dict[manual_away])
                 st.markdown("---")
                 st.metric("Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}")
+                st.write(
+                    f"Szansa {manual_home} (Dom): {res['prob_home']*100:.1f}% | Szansa "
+                    f"{manual_away} (Gość): {res['prob_away']*100:.1f}% | Suma pkt: {res['total_pts']}"
+                )
     else:
         match_labels = []
         for m in live_odds_data:
@@ -568,15 +559,16 @@ with tab1:
         with c2:
             st.metric("Szacowana Suma Pkt", f"{res['total_pts']} pkt")
         with c3:
-            st.metric(f"Szansa {matched_home} (ML)", f"{res['prob_home']*100:.1f}%")
+            st.metric(f"Szansa {matched_home}", f"{res['prob_home']*100:.1f}%")
         with c4:
-            st.metric(f"Szansa {matched_away} (ML)", f"{res['prob_away']*100:.1f}%")
+            st.metric(f"Szansa {matched_away}", f"{res['prob_away']*100:.1f}%")
 
         st.markdown("---")
         st.subheader("🎯 Kalkulator Value Betów (Moneyline) + Stawka Kelly'ego")
 
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
+        spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
         total_bookie_line, total_over_odds, total_under_odds = 0.0, 1.9, 1.9
 
         if bookmakers:
@@ -589,6 +581,13 @@ with tab1:
                                 bookie_h_odds = float(out.get("price", 1.9))
                             elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
                                 bookie_a_odds = float(out.get("price", 1.9))
+                    elif market.get("key") == "spreads":
+                        for out in market.get("outcomes", []):
+                            out_name = out.get("name")
+                            if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
+                                spread_bookie_line = float(out.get("point", 0.0))
+                                spread_bookie_odds = float(out.get("price", 1.9))
+                                spread_team = matched_home
                     elif market.get("key") == "totals":
                         for out in market.get("outcomes", []):
                             if out.get("name") == "Over":
@@ -609,13 +608,13 @@ with tab1:
                 ev_h = (res["prob_home"] * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res["prob_home"], bookie_h_odds)
                 if ev_h > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Stawka (Kelly): **{kelly_stake_h} PLN**")
+                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
                 if st.button("➕ Zapisz typ gospodarza"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_home, bookie_h_odds)
-                    st.success("Zapisano w bazie Supabase!")
+                    st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
 
         with col_b2:
@@ -626,47 +625,78 @@ with tab1:
                 ev_a = (res["prob_away"] * bookie_a_odds) - 1
                 kelly_stake_a = calculate_kelly_stake(bankroll, res["prob_away"], bookie_a_odds)
                 if ev_a > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Stawka (Kelly): **{kelly_stake_a} PLN**")
+                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
                 if st.button("➕ Zapisz typ gościa"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_away, bookie_a_odds)
-                    st.success("Zapisano w bazie Supabase!")
+                    st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
 
-        # --- ANALIZA OVER / UNDER ---
         st.markdown("---")
-        st.subheader("📊 Analiza Rynku Over / Under")
+        st.subheader("📊 Analiza Rynku Over / Under (Suma Punktów)")
         st.write(f"• **Szacowana suma punktów przez model:** `{res['total_pts']} pkt`")
-
         if total_bookie_line > 0.0:
             st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
             diff_total = res["total_pts"] - total_bookie_line
             if diff_total > 2.5:
-                st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}**")
+                st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
                 if st.button("➕ Zapisz typ OVER"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Over {total_bookie_line}", total_over_odds)
                     st.success("Zapisano Over do bazy!")
                     st.rerun()
             elif diff_total < -2.5:
-                st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}**")
+                st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}** (Model przewiduje o {abs(diff_total):.1f} pkt mniej!)")
                 if st.button("➕ Zapisz typ UNDER"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Under {total_bookie_line}", total_under_odds)
                     st.success("Zapisano Under do bazy!")
                     st.rerun()
             else:
-                st.info("ℹ️ Linia bukmachera bliska szacunkom modelu.")
+                st.info("ℹ️ Linia bukmachera jest bliska szacunkom modelu - brak wyraźnej przewagi.")
+        else:
+            st.info("Brak dostępnych rynków Total Points u bukmachera.")
+
+        st.markdown("---")
+        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
+
+        raw_diff = res["expected_diff"]
+        safety_buffer = 3.0
+
+        if raw_diff > 0:
+            model_margin = raw_diff
+            recommended_team = matched_home
+            safe_spread = -(model_margin - safety_buffer)
+        else:
+            model_margin = abs(raw_diff)
+            recommended_team = matched_away
+            safe_spread = -(model_margin - safety_buffer)
+
+        safe_spread = round(safe_spread * 2) / 2
+
+        st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
+        st.write(f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):** **{recommended_team} ({safe_spread:+.1f})**")
+
+        if spread_bookie_line != 0.0:
+            if spread_team == recommended_team:
+                bookie_team_spread = spread_bookie_line
+            else:
+                bookie_team_spread = -spread_bookie_line
+
+            if bookie_team_spread > safe_spread:
+                st.success(f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię ({bookie_team_spread:+.1f}) dla {recommended_team}!")
+            else:
+                st.info("ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego zapasu.")
 
 with tab2:
-    st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year}")
+    st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
     if teams_dict:
         df = pd.DataFrame(list(teams_dict.values()))
         df = df.sort_values(by="TEAM_NAME").reset_index(drop=True)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("🎯 Rejestr Typów & ROI")
+    st.subheader("🎯 Rejestr Typów i Automatyczna Analityka ROI (Zapis w Chmurze)")
     bets = load_bets()
     if not bets:
         st.info("Brak zapisanych typów w bazie chmurowej Supabase.")
@@ -696,12 +726,10 @@ with tab3:
             st.rerun()
 
 with tab4:
-    st.subheader("🧠 Stan Samouczenia Modelu (LogisticRegression)")
-    st.info("🤖 Silnik `scikit-learn` uczy się na Twoich rozliczonych typach z Supabase i koryguje współczynniki drużyn.")
-    
+    st.subheader("🧠 Stan Samouczenia Modelu (Wagi Trwałe w Chmurze)")
     error_logs_data = load_model_weights()
     if not error_logs_data:
-        st.info("Model nie wprowadził jeszcze żadnych korekt drużynowych.")
+        st.info("Model nie wprowadził jeszcze żadnych korekt. Wagi dla wszystkich drużyn wynoszą obecnie 0.0.")
     else:
         weights_list = []
         for team, vals in error_logs_data.items():
