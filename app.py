@@ -765,7 +765,7 @@ with tab3:
         df_bets = pd.DataFrame(display_bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
+        settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
             won = [b for b in settled if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
