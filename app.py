@@ -111,7 +111,6 @@ def save_bet(date, match, pick, odds):
             "match": match,
             "pick": pick,
             "odds": odds,
-            "initial_odds": odds,
             "status": "Oczekujący",
             "score": ""
         }
@@ -159,7 +158,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     
     error_logs = {}
@@ -213,7 +212,7 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -367,54 +366,6 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- PROFESJONALNA BAZA PRAWDZIWYCH LIDERÓW DLA WSZYSTKICH 30 DRUŻYN NBA ---
-ALL_TEAM_PLAYERS = {
-    "Atlanta Hawks": [{"name": "Trae Young", "pos": "PG", "pts": 25.7, "ast": 10.8}, {"name": "Jalen Johnson", "pos": "PF", "pts": 16.0, "reb": 8.7}],
-    "Boston Celtics": [{"name": "Jayson Tatum", "pos": "SF", "pts": 26.9, "reb": 8.1}, {"name": "Jaylen Brown", "pos": "SG", "pts": 23.0, "reb": 5.5}],
-    "Brooklyn Nets": [{"name": "Cam Thomas", "pos": "SG", "pts": 22.5, "reb": 3.2}, {"name": "Dennis Schroder", "pos": "PG", "pts": 14.0, "ast": 6.0}],
-    "Charlotte Hornets": [{"name": "LaMelo Ball", "pos": "PG", "pts": 23.9, "ast": 8.0}, {"name": "Miles Bridges", "pos": "PF", "pts": 21.0, "reb": 7.3}],
-    "Chicago Bulls": [{"name": "Coby White", "pos": "PG", "pts": 19.1, "ast": 5.1}, {"name": "Nikola Vucevic", "pos": "C", "pts": 18.0, "reb": 10.5}],
-    "Cleveland Cavaliers": [{"name": "Donovan Mitchell", "pos": "SG", "pts": 26.6, "ast": 6.1}, {"name": "Darius Garland", "pos": "PG", "pts": 18.1, "ast": 6.5}],
-    "Dallas Mavericks": [{"name": "Luka Doncic", "pos": "PG", "pts": 33.9, "reb": 9.2, "ast": 9.8}, {"name": "Kyrie Irving", "pos": "SG", "pts": 25.6, "ast": 5.2}],
-    "Denver Nuggets": [{"name": "Nikola Jokic", "pos": "C", "pts": 26.4, "reb": 12.4, "ast": 9.0}, {"name": "Jamal Murray", "pos": "PG", "pts": 21.2, "ast": 4.1}],
-    "Detroit Pistons": [{"name": "Cade Cunningham", "pos": "PG", "pts": 22.7, "ast": 7.5}, {"name": "Jalen Duren", "pos": "C", "pts": 13.8, "reb": 11.6}],
-    "Golden State Warriors": [{"name": "Stephen Curry", "pos": "PG", "pts": 26.4, "ast": 5.1}, {"name": "Jonathan Kuminga", "pos": "PF", "pts": 16.1, "reb": 4.8}],
-    "Houston Rockets": [{"name": "Alperen Sengun", "pos": "C", "pts": 21.1, "reb": 9.3}, {"name": "Jalen Green", "pos": "SG", "pts": 19.6, "reb": 5.2}],
-    "Indiana Pacers": [{"name": "Tyrese Haliburton", "pos": "PG", "pts": 20.1, "ast": 10.9}, {"name": "Pascal Siakam", "pos": "PF", "pts": 21.3, "reb": 7.8}],
-    "Los Angeles Clippers": [{"name": "Kawhi Leonard", "pos": "SF", "pts": 23.7, "reb": 6.1}, {"name": "James Harden", "pos": "PG", "pts": 16.6, "ast": 8.5}],
-    "Los Angeles Lakers": [{"name": "LeBron James", "pos": "SF", "pts": 25.7, "ast": 7.3}, {"name": "Anthony Davis", "pos": "C", "pts": 24.7, "reb": 12.6}],
-    "Memphis Grizzlies": [{"name": "Ja Morant", "pos": "PG", "pts": 25.1, "ast": 8.1}, {"name": "Jaren Jackson Jr.", "pos": "PF", "pts": 22.5, "reb": 5.5}],
-    "Miami Heat": [{"name": "Jimmy Butler", "pos": "SF", "pts": 20.8, "reb": 5.3}, {"name": "Bam Adebayo", "pos": "C", "pts": 19.3, "reb": 10.4}],
-    "Milwaukee Bucks": [{"name": "Giannis Antetokounmpo", "pos": "PF", "pts": 30.4, "reb": 11.5}, {"name": "Damian Lillard", "pos": "PG", "pts": 24.3, "ast": 7.0}],
-    "Minnesota Timberwolves": [{"name": "Anthony Edwards", "pos": "SG", "pts": 25.9, "reb": 5.4}, {"name": "Karl-Anthony Towns", "pos": "C", "pts": 21.8, "reb": 8.3}],
-    "New Orleans Pelicans": [{"name": "Zion Williamson", "pos": "PF", "pts": 22.9, "reb": 5.8}, {"name": "Brandon Ingram", "pos": "SF", "pts": 20.8, "ast": 5.7}],
-    "New York Knicks": [{"name": "Jalen Brunson", "pos": "PG", "pts": 28.7, "ast": 6.7}, {"name": "Julius Randle", "pos": "PF", "pts": 24.0, "reb": 9.2}],
-    "Oklahoma City Thunder": [{"name": "Shai Gilgeous-Alexander", "pos": "PG", "pts": 30.1, "ast": 6.2}, {"name": "Chet Holmgren", "pos": "C", "pts": 16.5, "reb": 7.9}],
-    "Orlando Magic": [{"name": "Paolo Banchero", "pos": "PF", "pts": 22.6, "reb": 6.9}, {"name": "Franz Wagner", "pos": "SF", "pts": 19.7, "reb": 5.3}],
-    "Philadelphia 76ers": [{"name": "Joel Embiid", "pos": "C", "pts": 34.7, "reb": 11.0}, {"name": "Tyrese Maxey", "pos": "PG", "pts": 25.9, "ast": 6.2}],
-    "Phoenix Suns": [{"name": "Kevin Durant", "pos": "PF", "pts": 27.1, "reb": 6.6}, {"name": "Devin Booker", "pos": "SG", "pts": 27.1, "ast": 6.9}],
-    "Portland Trail Blazers": [{"name": "Anfernee Simons", "pos": "SG", "pts": 22.6, "ast": 5.5}, {"name": "Jerami Grant", "pos": "PF", "pts": 21.0, "reb": 3.5}],
-    "Sacramento Kings": [{"name": "De'Aaron Fox", "pos": "PG", "pts": 26.6, "ast": 5.6}, {"name": "Domantas Sabonis", "pos": "C", "pts": 19.4, "reb": 13.7}],
-    "San Antonio Spurs": [{"name": "Victor Wembanyama", "pos": "C", "pts": 21.4, "reb": 10.6}, {"name": "Devin Vassell", "pos": "SG", "pts": 19.5, "ast": 4.1}],
-    "Toronto Raptors": [{"name": "Scottie Barnes", "pos": "SF", "pts": 19.9, "reb": 8.2}, {"name": "RJ Barrett", "pos": "SG", "pts": 20.8, "reb": 6.2}],
-    "Utah Jazz": [{"name": "Lauri Markkanen", "pos": "PF", "pts": 23.2, "reb": 8.2}, {"name": "Jordan Clarkson", "pos": "SG", "pts": 17.1, "ast": 3.4}],
-    "Washington Wizards": [{"name": "Kyle Kuzma", "pos": "PF", "pts": 22.2, "reb": 6.6}, {"name": "Jordan Poole", "pos": "SG", "pts": 17.4, "ast": 4.4}]
-}
-
-def get_player_props(team_name):
-    return ALL_TEAM_PLAYERS.get(team_name, [{"name": "Lider Zespołu", "pos": "G/F", "pts": 20.0, "reb": 5.0}])
-
-# --- DETERMINISTYCZNA ANALIZA SĘDZIÓW ---
-def get_referee_adjustment(match_label):
-    referees_database = [
-        {"ref": "Scott Foster", "profile": "Under 📉 (Twarda gra, mniej wolnych)", "adj": -2.2},
-        {"ref": "Tony Brothers", "profile": "Over 📈 (Dużo gwizdków, wolne)", "adj": +2.5},
-        {"ref": "Zach Zarba", "profile": "Neutralny ⚖️", "adj": 0.0},
-        {"ref": "Ed Malloy", "profile": "Slight Under 📉", "adj": -1.0},
-    ]
-    idx = sum(ord(c) for c in match_label) % len(referees_database)
-    return referees_database[idx]
-
 def check_if_team_played_yesterday(team_name):
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={yesterday}"
@@ -431,7 +382,7 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
-def predict_matchup(home_team, away_team, match_label="", home_b2b=False, away_b2b=False):
+def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
     a_off = away_team["AVG_PTS_FOR"]
@@ -472,20 +423,19 @@ def predict_matchup(home_team, away_team, match_label="", home_b2b=False, away_b
 
     base_total = expected_home_pts + expected_away_pts
     league_ou_offset = 4.8
-    
-    ref_data = get_referee_adjustment(match_label)
-    expected_total_pts = base_total + league_ou_offset + ref_data["adj"]
+    expected_total_pts = base_total + league_ou_offset
 
     expected_diff = expected_home_pts - expected_away_pts
     base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     
+    # --- TUTAJ DZIAŁA SCIKIT-LEARN ---
     try:
         bets = load_bets()
         settled_moneyline = [b for b in bets if b.get("status") in ["Wygrany", "Przegrany"] and not ("Over" in b.get("pick","") or "Under" in b.get("pick",""))]
         
         if len(settled_moneyline) >= 5:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             ml_model = LogisticRegression()
             ml_model.fit(X_train, y_train)
             ml_boost = 0.02 * (ml_model.coef_[0][0] if hasattr(ml_model, 'coef_') else 0)
@@ -506,7 +456,6 @@ def predict_matchup(home_team, away_team, match_label="", home_b2b=False, away_b
         "prob_away": prob_away,
         "handicap": handicap,
         "expected_diff": expected_diff,
-        "referee_info": ref_data
     }
 
 def calculate_kelly_stake(bankroll, probability, odds):
@@ -516,7 +465,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (Syndicate Master Edition)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Pure ML Core)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -525,7 +474,7 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 System Syndykatowy w Pełni Sprawny")
+st.sidebar.success("🟢 Skuteczny rdzeń (ESPN + Supabase + LogisticRegression) AKTYWNY")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -537,14 +486,14 @@ except Exception:
     pass
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "🏀 Terminarz & Syndikat Studio",
+    "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
-    "🎯 Rejestr Typów & Sharp Money",
+    "🎯 Rejestr Typów",
     "🧠 Stan Samouczenia Modelu (ML)",
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze, Value Bety, Player Props & Sędziowie")
+    st.subheader("Nadchodzące mecze, Value Bety & Analiza O/U")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -557,7 +506,7 @@ with tab1:
                 manual_away = st.selectbox("Gość:", all_teams, index=1 if len(all_teams) > 1 else 0)
 
             if manual_home in teams_dict and manual_away in teams_dict:
-                res = predict_matchup(teams_dict[manual_home], teams_dict[manual_away], f"{manual_away} @ {manual_home}")
+                res = predict_matchup(teams_dict[manual_home], teams_dict[manual_away])
                 st.markdown("---")
                 st.metric("Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}")
     else:
@@ -610,14 +559,14 @@ with tab1:
         home_b2b = check_if_team_played_yesterday(matched_home)
         away_b2b = check_if_team_played_yesterday(matched_away)
 
-        res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away], selected_match_label, home_b2b, away_b2b)
+        res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away], home_b2b, away_b2b)
 
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.metric("Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}")
         with c2:
-            st.metric("Szacowana Suma Pkt (z sędziami)", f"{res['total_pts']} pkt")
+            st.metric("Szacowana Suma Pkt", f"{res['total_pts']} pkt")
         with c3:
             st.metric(f"Szansa {matched_home} (ML)", f"{res['prob_home']*100:.1f}%")
         with c4:
@@ -686,13 +635,10 @@ with tab1:
                     st.success("Zapisano w bazie Supabase!")
                     st.rerun()
 
-        # --- SEKCJA: ANALIZA O/U + SĘDZIOWIE ---
+        # --- ANALIZA OVER / UNDER ---
         st.markdown("---")
-        st.subheader("📊 Analiza Rynku Over / Under & Wpływ Sędziów")
-        
-        ref = res["referee_info"]
-        st.info(f"⚖️ **Główny Arbiter:** {ref['ref']} | **Profil:** {ref['profile']} (Wpływ: {ref['adj']:+.1f} pkt)")
-        st.write(f"• **Skorygowana suma punktów przez model:** `{res['total_pts']} pkt`")
+        st.subheader("📊 Analiza Rynku Over / Under")
+        st.write(f"• **Szacowana suma punktów przez model:** `{res['total_pts']} pkt`")
 
         if total_bookie_line > 0.0:
             st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
@@ -712,23 +658,6 @@ with tab1:
             else:
                 st.info("ℹ️ Linia bukmachera bliska szacunkom modelu.")
 
-        # --- SEKCJA: PLAYER PROPS DLA WSZYSTKICH 30 DRUŻYN ---
-        st.markdown("---")
-        st.subheader("⭐ Player Props (Liderzy Statystyczni)")
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            st.markdown(f"**{matched_home}**")
-            home_players = get_player_props(matched_home)
-            for p in home_players:
-                extra_stat = f" | Zbiórki/Asysty: {p.get('reb', p.get('ast', 0))}" if ('reb' in p or 'ast' in p) else ""
-                st.write(f"• **{p['name']}** ({p['pos']}) — Średnia: **{p['pts']} pkt**{extra_stat}")
-        with col_p2:
-            st.markdown(f"**{matched_away}**")
-            away_players = get_player_props(matched_away)
-            for p in away_players:
-                extra_stat = f" | Zbiórki/Asysty: {p.get('reb', p.get('ast', 0))}" if ('reb' in p or 'ast' in p) else ""
-                st.write(f"• **{p['name']}** ({p['pos']}) — Średnia: **{p['pts']} pkt**{extra_stat}")
-
 with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year}")
     if teams_dict:
@@ -737,36 +666,17 @@ with tab2:
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("🎯 Rejestr Typów, ROI & Detekcja Ruchu Kursów (Sharp Money)")
+    st.subheader("🎯 Rejestr Typów & ROI")
     bets = load_bets()
     if not bets:
         st.info("Brak zapisanych typów w bazie chmurowej Supabase.")
     else:
-        display_bets = []
-        for b in bets:
-            current_odds = b.get("odds", 0.0)
-            initial_odds = b.get("initial_odds", current_odds)
-            if initial_odds and initial_odds > 0:
-                diff_odds = round(current_odds - initial_odds, 2)
-                if diff_odds < 0:
-                    movement = f"📉 Spadek o {abs(diff_odds)} (Sharp Money 🔥)"
-                elif diff_odds > 0:
-                    movement = f"📈 Wzrost o {diff_odds} (Public Money)"
-                else:
-                    movement = "➖ Stabilny"
-            else:
-                movement = "Brak danych"
-
-            item = b.copy()
-            item["Ruch Kursu"] = movement
-            display_bets.append(item)
-
-        df_bets = pd.DataFrame(display_bets)
+        df_bets = pd.DataFrame(bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status") == "Wygrany"]
+            won = [b for b in settled if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
@@ -786,8 +696,8 @@ with tab3:
             st.rerun()
 
 with tab4:
-    st.subheader("🧠 Stan Samouczenia Modelu (Machine Learning)")
-    st.info("🤖 Silnik **scikit-learn (LogisticRegression)** + Supabase działają w pełni.")
+    st.subheader("🧠 Stan Samouczenia Modelu (LogisticRegression)")
+    st.info("🤖 Silnik `scikit-learn` uczy się na Twoich rozliczonych typach z Supabase i koryguje współczynniki drużyn.")
     
     error_logs_data = load_model_weights()
     if not error_logs_data:
@@ -803,4 +713,3 @@ with tab4:
         df_weights = pd.DataFrame(weights_list)
         df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
         st.dataframe(df_weights, use_container_width=True, hide_index=True)
-  
