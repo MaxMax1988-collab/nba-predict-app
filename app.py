@@ -211,13 +211,13 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
     today = datetime.now()
     dates_to_check = [
-        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(3)
+        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(2)
     ]
 
     for date_str in dates_to_check:
@@ -247,10 +247,16 @@ def auto_settle_bets():
                                     a_team = t_name
                                     a_score = score
 
+                            # Pobranie daty meczu z API ESPN (YYYY-MM-DD)
+                            event_date_raw = event.get("date", "")[:10]
+
                             if h_team and a_team:
                                 for bet in pending_bets:
                                     match_str = bet.get("match", "")
-                                    if a_team in match_str and h_team in match_str:
+                                    bet_date = bet.get("date", "")
+
+                                    # ZABEZPIECZENIE: Dopasowanie nazw ORAZ zgodność daty zakładu z datą meczu
+                                    if a_team in match_str and h_team in match_str and bet_date == event_date_raw:
                                         pick = bet.get("pick")
                                         if "Over" in pick or "Under" in pick:
                                             total_points = h_score + a_score
@@ -377,7 +383,7 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
-# --- ZAAWANSOWANA FUNKCJA PREDYKCJI Z NAPRAWIONYM DWUKIERUNKOWYM RYNKIEM O/U ---
+# --- ZAAWANSOWANA FUNKCJA PREDYKCJI Z OFSETEM O/U ---
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
@@ -419,9 +425,8 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         + away_mismatch_bonus
     )
 
-    # --- KLUCZOWA NAPRAWKA O/U: Dodanie offsetu ligowego niwelującego zaniżanie punktów ---
     base_total = expected_home_pts + expected_away_pts
-    league_ou_offset = 4.8  # Stała kalibracyjna dla nowoczesnego, szybkiego stylu w NBA
+    league_ou_offset = 4.8
     expected_total_pts = base_total + league_ou_offset
 
     expected_diff = expected_home_pts - expected_away_pts
