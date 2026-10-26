@@ -473,7 +473,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (ML + O/U)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (ML + O/U + Handicaps)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -482,7 +482,7 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 System (scikit-learn + Supabase + O/U) Aktywny")
+st.sidebar.success("🟢 System (scikit-learn + Supabase + O/U + Handicaps) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -673,6 +673,37 @@ with tab1:
                 st.info("ℹ️ Linia bukmachera jest bliska szacunkom modelu - brak wyraźnej przewagi.")
         else:
             st.info("Brak dostępnych rynków Total Points u bukmachera.")
+
+        st.markdown("---")
+        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
+
+        raw_diff = res["expected_diff"]
+        safety_buffer = 3.0
+
+        if raw_diff > 0:
+            model_margin = raw_diff
+            recommended_team = matched_home
+            safe_spread = -(model_margin - safety_buffer)
+        else:
+            model_margin = abs(raw_diff)
+            recommended_team = matched_away
+            safe_spread = -(model_margin - safety_buffer)
+
+        safe_spread = round(safe_spread * 2) / 2
+
+        st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
+        st.write(f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):** **{recommended_team} ({safe_spread:+.1f})**")
+
+        if spread_bookie_line != 0.0:
+            if spread_team == recommended_team:
+                bookie_team_spread = spread_bookie_line
+            else:
+                bookie_team_spread = -spread_bookie_line
+
+            if bookie_team_spread > safe_spread:
+                st.success(f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię ({bookie_team_spread:+.1f}) dla {recommended_team}!")
+            else:
+                st.info("ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego zapasu.")
 
 with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
