@@ -484,7 +484,7 @@ def predict_matchup(home_team, away_team, match_label="", home_b2b=False, away_b
     
     try:
         bets = load_bets()
-        settled_moneyline = [b for b in bets if b.get("status"] in ["Wygrany", "Przegrany"] and not ("Over" in b.get("pick","") or "Under" in b.get("pick",""))]
+        settled_moneyline = [b for b in bets if b.get("status") in ["Wygrany", "Przegrany"] and not ("Over" in b.get("pick","") or "Under" in b.get("pick",""))]
         
         if len(settled_moneyline) >= 5:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
