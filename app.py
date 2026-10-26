@@ -159,7 +159,7 @@ def update_model_weights_from_bets():
     ]
     
     error_logs = {}
-    lr = 0.3  # Szybszy współczynnik nauki 0.3
+    lr = 0.3
 
     for bet in settled_bets:
         match = bet.get("match", "")
@@ -377,7 +377,7 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
-# --- ZAAWANSOWANA FUNKCJA PREDYKCJI Z DYNAMICZNYM PACE & MATCHUP RATING ---
+# --- ZAAWANSOWANA FUNKCJA PREDYKCJI Z NAPRAWIONYM DWUKIERUNKOWYM RYNKIEM O/U ---
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
@@ -419,7 +419,11 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         + away_mismatch_bonus
     )
 
-    expected_total_pts = expected_home_pts + expected_away_pts
+    # --- KLUCZOWA NAPRAWKA O/U: Dodanie offsetu ligowego niwelującego zaniżanie punktów ---
+    base_total = expected_home_pts + expected_away_pts
+    league_ou_offset = 4.8  # Stała kalibracyjna dla nowoczesnego, szybkiego stylu w NBA
+    expected_total_pts = base_total + league_ou_offset
+
     expected_diff = expected_home_pts - expected_away_pts
     prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     prob_home = max(0.12, min(0.88, prob_home))
@@ -631,13 +635,13 @@ with tab1:
         if total_bookie_line > 0.0:
             st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
             diff_total = res["total_pts"] - total_bookie_line
-            if diff_total > 3.0:
+            if diff_total > 2.5:
                 st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
                 if st.button("➕ Zapisz typ OVER"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Over {total_bookie_line}", total_over_odds)
                     st.success("Zapisano Over do bazy!")
                     st.rerun()
-            elif diff_total < -3.0:
+            elif diff_total < -2.5:
                 st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}** (Model przewiduje o {abs(diff_total):.1f} pkt mniej!)")
                 if st.button("➕ Zapisz typ UNDER"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Under {total_bookie_line}", total_under_odds)
