@@ -158,7 +158,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
     ]
     
     error_logs = {}
