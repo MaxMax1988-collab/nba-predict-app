@@ -756,7 +756,7 @@ with tab3:
             cum_profit = 0.0
             for i, b in enumerate(settled):
                 odds_val = float(b.get("odds", 1.9))
-                if b.get("status"] == "Wygrany":
+                if b.get("status") == "Wygrany":
                     cum_profit += (odds_val - 1.0)
                 else:
                     cum_profit -= 1.0
