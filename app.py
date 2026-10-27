@@ -217,8 +217,9 @@ def auto_settle_bets():
         return
 
     today = datetime.now()
+    # Zwiększamy zakres do 5 dni wstecz oraz dodajemy tolerancję stref czasowych (UTC w ESPN)
     dates_to_check = [
-        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(2)
+        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(5)
     ]
 
     for date_str in dates_to_check:
@@ -255,24 +256,33 @@ def auto_settle_bets():
                                     match_str = bet.get("match", "")
                                     bet_date = bet.get("date", "")
 
-                                    if a_team in match_str and h_team in match_str and bet_date == event_date_raw:
-                                        pick = bet.get("pick")
-                                        if "Over" in pick or "Under" in pick:
-                                            total_points = h_score + a_score
-                                            try:
-                                                parts = pick.split(" ")
-                                                line_val = float(parts[1])
-                                                is_over = parts[0] == "Over"
-                                                won_cond = total_points > line_val if is_over else total_points < line_val
-                                                new_status = "Wygrany" if won_cond else "Przegrany"
-                                            except:
-                                                new_status = "Oczekujący"
-                                        else:
-                                            winner = h_team if h_score > a_score else a_team
-                                            new_status = "Wygrany" if pick == winner else "Przegrany"
+                                    if a_team in match_str and h_team in match_str:
+                                        # Sprawdzenie daty z tolerancją 1 dnia ze względu na UTC w API ESPN
+                                        try:
+                                            b_dt = datetime.strptime(bet_date, "%Y-%m-%d")
+                                            e_dt = datetime.strptime(event_date_raw, "%Y-%m-%d")
+                                            diff_days = abs((b_dt - e_dt).days)
+                                        except:
+                                            diff_days = 0
 
-                                        score_str = f"{a_score}:{h_score}"
-                                        update_bet_status(bet["id"], new_status, score_str)
+                                        if diff_days <= 1:
+                                            pick = bet.get("pick")
+                                            if "Over" in pick or "Under" in pick:
+                                                total_points = h_score + a_score
+                                                try:
+                                                    parts = pick.split(" ")
+                                                    line_val = float(parts[1])
+                                                    is_over = parts[0] == "Over"
+                                                    won_cond = total_points > line_val if is_over else total_points < line_val
+                                                    new_status = "Wygrany" if won_cond else "Przegrany"
+                                                except:
+                                                    new_status = "Oczekujący"
+                                            else:
+                                                winner = h_team if h_score > a_score else a_team
+                                                new_status = "Wygrany" if pick == winner else "Przegrany"
+
+                                            score_str = f"{a_score}:{h_score}"
+                                            update_bet_status(bet["id"], new_status, score_str)
         except Exception:
             pass
 
@@ -723,7 +733,7 @@ with tab3:
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status") == "Wygrany"]
+            won = [b for b in settled if b.get("status"] == "Wygrany")
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
