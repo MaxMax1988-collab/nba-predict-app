@@ -747,30 +747,35 @@ with tab3:
             with c_r3:
                 st.metric("ROI", f"{roi:+.2f}%")
 
-            # --- NOWOŚĆ: WYKRES LINIOWY POSTĘPÓW ROI / ZYSKU ---
+            # --- POPRAWIONY WYKRES LINIOWY POSTĘPÓW (SORTOWANY CHRONOLOGICZNIE) ---
             st.markdown("---")
             st.subheader("📈 Wykres Liniowy Postępów (Skumulowany Wynik w Czasie)")
             
-            # Przygotowanie danych do wykresu liniowego
+            # Sortujemy poprawnie po dacie oraz ID, aby zachować ciągłość historyczną
+            settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
+            
             chart_data = []
             cum_profit = 0.0
-            for i, b in enumerate(settled):
+            for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
                 if b.get("status") == "Wygrany":
                     cum_profit += (odds_val - 1.0)
                 else:
                     cum_profit -= 1.0
                 
-                b_date = b.get("date", f"Typ {i+1}")
+                b_date = b.get("date", "Brak")
+                # Używamy numeru porządkowego jako indeksu numerycznego (1, 2, 3...)
                 chart_data.append({
-                    "Krok / Zakład": f"#{i+1} ({b_date})",
+                    "Nr": i + 1,
+                    "Data / Mecz": f"#{i+1} ({b_date})",
                     "Skumulowany Zysk (j.)": round(cum_profit, 2)
                 })
             
             if chart_data:
                 df_chart = pd.DataFrame(chart_data)
-                df_chart = df_chart.set_index("Krok / Zakład")
-                st.line_chart(df_chart)
+                # Ustawiamy kolumnę "Nr" jako indeks, żeby Streamlit posortował osi X numerycznie, a nie alfabetycznie
+                df_chart = df_chart.set_index("Nr")
+                st.line_chart(df_chart[["Skumulowany Zysk (j.)"]])
 
         if st.button("Wyczyść całą bazę typów w chmurze"):
             clear_bets()
