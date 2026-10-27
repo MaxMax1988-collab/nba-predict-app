@@ -6,7 +6,7 @@ import requests
 import streamlit as st
 from supabase import create_client, Client
 
-from sklearn.linear_model import LogisticRegression
+import xgboost as xgb
 import numpy as np
 
 st.set_page_config(
@@ -212,7 +212,7 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -390,7 +390,7 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
-# --- PREDYKCJA Z INTEGROWANYM SCIKIT-LEARN ---
+# --- PREDYKCJA Z ZAAWANSOWANYM XGBOOST ---
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     h_off = home_team["AVG_PTS_FOR"]
     h_def = home_team["AVG_PTS_AGAINST"]
@@ -437,7 +437,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     expected_diff = expected_home_pts - expected_away_pts
     base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     
-    # --- SCIKIT-LEARN LOGISTIC REGRESSION BOOST ---
+    # --- XGBOOST BOOST ---
     try:
         bets = load_bets()
         settled_moneyline = [
@@ -446,15 +446,16 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
             and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
         ]
         
-        if len(settled_moneyline) >= 5:
+        if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
-            ml_model = LogisticRegression()
-            ml_model.fit(X_train, y_train)
+            xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
+            xgb_model.fit(X_train, y_train)
             
-            coef = ml_model.coef_[0][0] if hasattr(ml_model, 'coef_') else 0.0
-            ml_boost = 0.02 * coef
+            dummy_input = np.array([[1.9]])
+            pred_prob = xgb_model.predict_proba(dummy_input)[0][1]
+            ml_boost = (pred_prob - 0.5) * 0.1
             prob_home = max(0.12, min(0.88, base_prob_home + ml_boost))
         else:
             prob_home = max(0.12, min(0.88, base_prob_home))
@@ -481,7 +482,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (ML + O/U + Handicaps)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + O/U + Handicaps)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -490,7 +491,7 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 System (scikit-learn + Supabase + O/U + Handicaps) Aktywny")
+st.sidebar.success("🟢 System (XGBoost + Supabase + O/U + Handicaps) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -505,7 +506,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
     "🎯 Rejestr Typów & ROI",
-    "🧠 Stan Samouczenia Modelu (ML)",
+    "🧠 Stan Samouczenia Modelu (XGBoost)",
 ])
 
 with tab1:
@@ -729,7 +730,7 @@ with tab3:
         df_bets = pd.DataFrame(bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
             won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
@@ -746,13 +747,38 @@ with tab3:
             with c_r3:
                 st.metric("ROI", f"{roi:+.2f}%")
 
+            # --- NOWOŚĆ: WYKRES LINIOWY POSTĘPÓW ROI / ZYSKU ---
+            st.markdown("---")
+            st.subheader("📈 Wykres Liniowy Postępów (Skumulowany Wynik w Czasie)")
+            
+            # Przygotowanie danych do wykresu liniowego
+            chart_data = []
+            cum_profit = 0.0
+            for i, b in enumerate(settled):
+                odds_val = float(b.get("odds", 1.9))
+                if b.get("status"] == "Wygrany":
+                    cum_profit += (odds_val - 1.0)
+                else:
+                    cum_profit -= 1.0
+                
+                b_date = b.get("date", f"Typ {i+1}")
+                chart_data.append({
+                    "Krok / Zakład": f"#{i+1} ({b_date})",
+                    "Skumulowany Zysk (j.)": round(cum_profit, 2)
+                })
+            
+            if chart_data:
+                df_chart = pd.DataFrame(chart_data)
+                df_chart = df_chart.set_index("Krok / Zakład")
+                st.line_chart(df_chart)
+
         if st.button("Wyczyść całą bazę typów w chmurze"):
             clear_bets()
             st.rerun()
 
 with tab4:
-    st.subheader("🧠 Stan Samouczenia Modelu (scikit-learn LogisticRegression)")
-    st.info("🤖 Silnik machine learning analizuje Twoje rozliczone typy w Supabase i optymalizuje predykcję prawdopodobieństwa.")
+    st.subheader("🧠 Stan Samouczenia Modelu (XGBoost Classifier)")
+    st.info("🤖 Potężny silnik XGBoost analizuje Twoje zebrane typy w Supabase i optymalizuje predykcje.")
     
     error_logs_data = load_model_weights()
     if not error_logs_data:
