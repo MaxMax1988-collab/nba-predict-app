@@ -154,7 +154,7 @@ def load_model_weights():
         res = supabase.table("model_weights").select("*").execute()
         weights_dict = {}
         for row in res.data:
-            weights_dict[row["team_name"]] = {
+            weights_dict[row.get("team_name")] = {
                 "off_corr": float(row.get("off_corr", 0.0)),
                 "def_corr": float(row.get("def_corr", 0.0))
             }
@@ -299,7 +299,7 @@ def auto_settle_bets():
                                                 new_status = "Wygrany" if pick == winner else "Przegrany"
 
                                             score_str = f"{a_score}:{h_score}"
-                                            update_bet_status(bet["id"], new_status, score_str)
+                                            update_bet_status(bet.get("id"), new_status, score_str)
         except Exception:
             pass
 
@@ -411,10 +411,10 @@ def check_if_team_played_yesterday(team_name):
 
 # --- PREDYKCJA Z ZAAWANSOWANYM XGBOOST ---
 def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
-    h_off = home_team["AVG_PTS_FOR"]
-    h_def = home_team["AVG_PTS_AGAINST"]
-    a_off = away_team["AVG_PTS_FOR"]
-    a_def = away_team["AVG_PTS_AGAINST"]
+    h_off = home_team.get("AVG_PTS_FOR")
+    h_def = home_team.get("AVG_PTS_AGAINST")
+    a_off = away_team.get("AVG_PTS_FOR")
+    a_def = away_team.get("AVG_PTS_AGAINST")
 
     league_avg_total = 224.0
     combined_team_pace = (h_off + h_def + a_off + a_def) / 2.0
@@ -426,8 +426,8 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
     fatigue_home = -1.2 if home_b2b else 0.0
     fatigue_away = -1.8 if away_b2b else 0.0
 
-    net_diff = home_team["NET_RATING"] - away_team["NET_RATING"]
-    power_diff = home_team["TOTAL_POWER"] - away_team["TOTAL_POWER"]
+    net_diff = home_team.get("NET_RATING") - away_team.get("NET_RATING")
+    power_diff = home_team.get("TOTAL_POWER") - away_team.get("TOTAL_POWER")
     home_advantage = 3.0
 
     expected_home_pts = (
@@ -467,7 +467,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
@@ -544,19 +544,19 @@ with tab1:
             if manual_home in teams_dict and manual_away in teams_dict:
                 res = predict_matchup(teams_dict[manual_home], teams_dict[manual_away])
                 st.markdown("---")
-                st.metric("Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}")
+                st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
     else:
         match_labels = []
         for m in live_odds_data:
             commence_time = m.get("commence_time", "")[:16].replace("T", " ")
-            match_labels.append(f"[{commence_time} UTC] {m['away_team']} @ {m['home_team']}")
+            match_labels.append(f"[{commence_time} UTC] {m.get('away_team')} @ {m.get('home_team')}")
 
         selected_match_label = st.selectbox("Wybierz nadchodzący mecz:", match_labels)
         match_idx = match_labels.index(selected_match_label)
         match_info = live_odds_data[match_idx]
 
-        raw_home = match_info["home_team"]
-        raw_away = match_info["away_team"]
+        raw_home = match_info.get("home_team")
+        raw_away = match_info.get("away_team")
 
         matched_home = TEAM_NAME_MAPPING.get(raw_home, raw_home)
         matched_away = TEAM_NAME_MAPPING.get(raw_away, raw_away)
@@ -600,13 +600,13 @@ with tab1:
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric("Przewidywany Wynik", f"{res['home_pts']} : {res['away_pts']}")
+            st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
         with c2:
-            st.metric("Szacowana Suma Pkt", f"{res['total_pts']} pkt")
+            st.metric("Szacowana Suma Pkt", f"{res.get('total_pts')} pkt")
         with c3:
-            st.metric(f"Szansa {matched_home} (ML)", f"{res['prob_home']*100:.1f}%")
+            st.metric(f"Szansa {matched_home} (ML)", f"{res.get('prob_home')*100:.1f}%")
         with c4:
-            st.metric(f"Szansa {matched_away} (ML)", f"{res['prob_away']*100:.1f}%")
+            st.metric(f"Szansa {matched_away} (ML)", f"{res.get('prob_away')*100:.1f}%")
 
         st.markdown("---")
         st.subheader("🎯 Kalkulator Value Betów (Moneyline) + Stawka Kelly'ego")
@@ -641,8 +641,8 @@ with tab1:
                             elif out.get("name") == "Under":
                                 total_under_odds = float(out.get("price", 1.9))
 
-        fair_home = round(1 / res["prob_home"], 2)
-        fair_away = round(1 / res["prob_away"], 2)
+        fair_home = round(1 / res.get("prob_home"), 2)
+        fair_away = round(1 / res.get("prob_away"), 2)
 
         col_b1, col_b2 = st.columns(2)
         with col_b1:
@@ -650,8 +650,8 @@ with tab1:
             st.write(f"Kurs Sprawiedliwy: **{fair_home:.2f}** | Bukmacher: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**")
 
             if bookie_h_odds > 0:
-                ev_h = (res["prob_home"] * bookie_h_odds) - 1
-                kelly_stake_h = calculate_kelly_stake(bankroll, res["prob_home"], bookie_h_odds)
+                ev_h = (res.get("prob_home") * bookie_h_odds) - 1
+                kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
                 if ev_h > 0:
                     st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                 else:
@@ -667,8 +667,8 @@ with tab1:
             st.write(f"Kurs Sprawiedliwy: **{fair_away:.2f}** | Bukmacher: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**")
 
             if bookie_a_odds > 0:
-                ev_a = (res["prob_away"] * bookie_a_odds) - 1
-                kelly_stake_a = calculate_kelly_stake(bankroll, res["prob_away"], bookie_a_odds)
+                ev_a = (res.get("prob_away") * bookie_a_odds) - 1
+                kelly_stake_a = calculate_kelly_stake(bankroll, res.get("prob_away"), bookie_a_odds)
                 if ev_a > 0:
                     st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
                 else:
@@ -681,10 +681,10 @@ with tab1:
 
         st.markdown("---")
         st.subheader("📊 Analiza Rynku Over / Under (Suma Punktów)")
-        st.write(f"• **Szacowana suma punktów przez model:** `{res['total_pts']} pkt`")
+        st.write(f"• **Szacowana suma punktów przez model:** `{res.get('total_pts')} pkt`")
         if total_bookie_line > 0.0:
             st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
-            diff_total = res["total_pts"] - total_bookie_line
+            diff_total = res.get("total_pts") - total_bookie_line
             if diff_total > 2.5:
                 st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
                 if st.button("➕ Zapisz typ OVER"):
@@ -705,7 +705,7 @@ with tab1:
         st.markdown("---")
         st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
 
-        raw_diff = res["expected_diff"]
+        raw_diff = res.get("expected_diff")
         safety_buffer = 3.0
 
         if raw_diff > 0:
@@ -754,7 +754,7 @@ with tab3:
             won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
-            total_returns = sum([b["odds"] for b in won])
+            total_returns = sum([b.get("odds", 1.9) for b in won])
             roi = ((total_returns - total_staked) / total_staked) * 100
 
             st.markdown("---")
