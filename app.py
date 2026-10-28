@@ -8,7 +8,6 @@ from supabase import create_client, Client
 
 import xgboost as xgb
 import numpy as np
-import plotly.express as px
 
 st.set_page_config(
     page_title="Advanced Multi-Factor NBA Predictor", page_icon="🏀", layout="wide"
@@ -17,19 +16,9 @@ st.set_page_config(
 # --- NOWOCZESNY DESIGN CSS (KARTY I WYGLĄD) ---
 st.markdown("""
 <style>
-    /* Globalne tło i czcionka */
     .stApp {
         background-color: #0e1117;
     }
-    /* Styl kart / kontenerów */
-    .css-1r6slb0, .stTabs [data-baseweb="tab-panel"] {
-        border-radius: 12px;
-    }
-    /* Estetyczne ramki sekcji */
-    div.element-container div.stMarkdown {
-        border-radius: 8px;
-    }
-    /* Stylizacja przycisków */
     .stButton>button {
         border-radius: 8px;
         font-weight: 600;
@@ -478,7 +467,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
@@ -777,7 +766,7 @@ with tab3:
             with c_r3:
                 st.metric("ROI", f"{roi:+.2f}%")
 
-            # --- NOWOCZESNY WYKRES PLOTLY ---
+            # --- WYKRES LINIOWY POSTĘPÓW ---
             st.markdown("---")
             st.subheader("📈 Wykres Liniowy Postępów (Skumulowany Wynik w Czasie)")
             
@@ -801,21 +790,8 @@ with tab3:
             
             if chart_data:
                 df_chart = pd.DataFrame(chart_data)
-                fig = px.line(
-                    df_chart, 
-                    x="Nr", 
-                    y="Skumulowany Zysk (j.)", 
-                    hover_data=["Data / Mecz"],
-                    markers=True,
-                    template="plotly_dark"
-                )
-                fig.update_traces(line_color="#00CC96", line_width=3)
-                fig.update_layout(
-                    xaxis_title="Numer zakładu",
-                    yaxis_title="Skumulowany zysk (jednostki)",
-                    margin=dict(l=20, r=20, t=20, b=20)
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                df_chart = df_chart.set_index("Nr")
+                st.line_chart(df_chart[["Skumulowany Zysk (j.)"]])
 
         if st.button("Wyczyść całą bazę typów w chmurze"):
             clear_bets()
