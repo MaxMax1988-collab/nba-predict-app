@@ -644,7 +644,7 @@ with tab1:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
-                    elif market.get("key"] == "totals":
+                    elif market.get("key") == "totals":
                         for out in market.get("outcomes", []):
                             if out.get("name"] == "Over":
                                 total_bookie_line = float(out.get("point", 220.0))
