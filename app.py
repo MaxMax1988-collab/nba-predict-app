@@ -8,10 +8,35 @@ from supabase import create_client, Client
 
 import xgboost as xgb
 import numpy as np
+import plotly.express as px
 
 st.set_page_config(
     page_title="Advanced Multi-Factor NBA Predictor", page_icon="🏀", layout="wide"
 )
+
+# --- NOWOCZESNY DESIGN CSS (KARTY I WYGLĄD) ---
+st.markdown("""
+<style>
+    /* Globalne tło i czcionka */
+    .stApp {
+        background-color: #0e1117;
+    }
+    /* Styl kart / kontenerów */
+    .css-1r6slb0, .stTabs [data-baseweb="tab-panel"] {
+        border-radius: 12px;
+    }
+    /* Estetyczne ramki sekcji */
+    div.element-container div.stMarkdown {
+        border-radius: 8px;
+    }
+    /* Stylizacja przycisków */
+    .stButton>button {
+        border-radius: 8px;
+        font-weight: 600;
+        width: 100%;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 DEFAULT_API_KEY = "62e230538ba5e8f6ff0aa80fcdbb481c"
 
@@ -163,7 +188,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     
     error_logs = {}
@@ -217,7 +242,7 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -246,7 +271,7 @@ def auto_settle_bets():
                             for c in competitors:
                                 t_name = c.get("team", {}).get("displayName", "")
                                 score = int(c.get("score", 0))
-                                if c.get("homeAway") == "home":
+                                if c.get("homeAway"] == "home":
                                     h_team = t_name
                                     h_score = score
                                 else:
@@ -312,7 +337,7 @@ def fetch_nba_standings():
 
                 def get_stat(name, default=0.0):
                     for s in stats_list:
-                        if s.get("name") == name:
+                        if s.get("name"] == name:
                             return float(s.get("value", default))
                     return float(default)
 
@@ -447,13 +472,13 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         bets = load_bets()
         settled_moneyline = [
             b for b in bets 
-            if b.get("status") in ["Wygrany", "Przegrany"] 
+            if b.get("status"] in ["Wygrany", "Przegrany"] 
             and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
         ]
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
@@ -605,26 +630,26 @@ with tab1:
         if bookmakers:
             for bookie in bookmakers:
                 for market in bookie.get("markets", []):
-                    if market.get("key") == "h2h":
+                    if market.get("key"] == "h2h":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 bookie_h_odds = float(out.get("price", 1.9))
                             elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
                                 bookie_a_odds = float(out.get("price", 1.9))
-                    elif market.get("key") == "spreads":
+                    elif market.get("key"] == "spreads":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
-                    elif market.get("key") == "totals":
+                    elif market.get("key"] == "totals":
                         for out in market.get("outcomes", []):
-                            if out.get("name") == "Over":
+                            if out.get("name"] == "Over":
                                 total_bookie_line = float(out.get("point", 220.0))
                                 total_over_odds = float(out.get("price", 1.9))
-                            elif out.get("name") == "Under":
+                            elif out.get("name"] == "Under":
                                 total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res["prob_home"], 2)
@@ -633,14 +658,12 @@ with tab1:
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             st.write(f"**{matched_home} (Gospodarz)**")
-            # Poprawione formatowanie do 2 miejsc po przecinku
             st.write(f"Kurs Sprawiedliwy: **{fair_home:.2f}** | Bukmacher: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**")
 
             if bookie_h_odds > 0:
                 ev_h = (res["prob_home"] * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res["prob_home"], bookie_h_odds)
                 if ev_h > 0:
-                    # Poprawione formatowanie stawki Kelly'ego do 2 miejsc po przecinku
                     st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
@@ -652,14 +675,12 @@ with tab1:
 
         with col_b2:
             st.write(f"**{matched_away} (Gość)**")
-            # Poprawione formatowanie do 2 miejsc po przecinku
             st.write(f"Kurs Sprawiedliwy: **{fair_away:.2f}** | Bukmacher: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**")
 
             if bookie_a_odds > 0:
                 ev_a = (res["prob_away"] * bookie_a_odds) - 1
                 kelly_stake_a = calculate_kelly_stake(bankroll, res["prob_away"], bookie_a_odds)
                 if ev_a > 0:
-                    # Poprawione formatowanie stawki Kelly'ego do 2 miejsc po przecinku
                     st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
@@ -739,9 +760,9 @@ with tab3:
         df_bets = pd.DataFrame(bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status") == "Wygrany"]
+            won = [b for b in settled if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
@@ -756,7 +777,7 @@ with tab3:
             with c_r3:
                 st.metric("ROI", f"{roi:+.2f}%")
 
-            # --- WYKRES LINIOWY POSTĘPÓW (SORTOWANY CHRONOLOGICZNIE) ---
+            # --- NOWOCZESNY WYKRES PLOTLY ---
             st.markdown("---")
             st.subheader("📈 Wykres Liniowy Postępów (Skumulowany Wynik w Czasie)")
             
@@ -766,7 +787,7 @@ with tab3:
             cum_profit = 0.0
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
-                if b.get("status") == "Wygrany":
+                if b.get("status"] == "Wygrany":
                     cum_profit += (odds_val - 1.0)
                 else:
                     cum_profit -= 1.0
@@ -780,8 +801,21 @@ with tab3:
             
             if chart_data:
                 df_chart = pd.DataFrame(chart_data)
-                df_chart = df_chart.set_index("Nr")
-                st.line_chart(df_chart[["Skumulowany Zysk (j.)"]])
+                fig = px.line(
+                    df_chart, 
+                    x="Nr", 
+                    y="Skumulowany Zysk (j.)", 
+                    hover_data=["Data / Mecz"],
+                    markers=True,
+                    template="plotly_dark"
+                )
+                fig.update_traces(line_color="#00CC96", line_width=3)
+                fig.update_layout(
+                    xaxis_title="Numer zakładu",
+                    yaxis_title="Skumulowany zysk (jednostki)",
+                    margin=dict(l=20, r=20, t=20, b=20)
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
         if st.button("Wyczyść całą bazę typów w chmurze"):
             clear_bets()
