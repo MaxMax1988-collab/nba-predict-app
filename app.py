@@ -649,7 +649,7 @@ with tab1:
                             if out.get("name") == "Over":
                                 total_bookie_line = float(out.get("point", 220.0))
                                 total_over_odds = float(out.get("price", 1.9))
-                            elif out.get("name"] == "Under":
+                            elif out.get("name") == "Under":
                                 total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res["prob_home"], 2)
@@ -760,9 +760,9 @@ with tab3:
         df_bets = pd.DataFrame(bets)
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
+        settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status"] == "Wygrany"]
+            won = [b for b in settled if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled)) * 100
             total_staked = len(settled)
             total_returns = sum([b["odds"] for b in won])
@@ -787,7 +787,7 @@ with tab3:
             cum_profit = 0.0
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
-                if b.get("status"] == "Wygrany":
+                if b.get("status") == "Wygrany":
                     cum_profit += (odds_val - 1.0)
                 else:
                     cum_profit -= 1.0
