@@ -472,7 +472,7 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         bets = load_bets()
         settled_moneyline = [
             b for b in bets 
-            if b.get("status"] in ["Wygrany", "Przegrany"] 
+            if b.get("status") in ["Wygrany", "Przegrany"] 
             and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
         ]
         
