@@ -337,7 +337,7 @@ def fetch_nba_standings():
 
                 def get_stat(name, default=0.0):
                     for s in stats_list:
-                        if s.get("name"] == name:
+                        if s.get("name") == name:
                             return float(s.get("value", default))
                     return float(default)
 
