@@ -630,7 +630,7 @@ with tab1:
         if bookmakers:
             for bookie in bookmakers:
                 for market in bookie.get("markets", []):
-                    if market.get("key"] == "h2h":
+                    if market.get("key") == "h2h":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
