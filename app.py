@@ -633,13 +633,15 @@ with tab1:
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             st.write(f"**{matched_home} (Gospodarz)**")
-            st.write(f"Kurs Sprawiedliwy: **{fair_home}** | Bukmacher: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**")
+            # Poprawione formatowanie do 2 miejsc po przecinku
+            st.write(f"Kurs Sprawiedliwy: **{fair_home:.2f}** | Bukmacher: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**")
 
             if bookie_h_odds > 0:
                 ev_h = (res["prob_home"] * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res["prob_home"], bookie_h_odds)
                 if ev_h > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h} PLN**")
+                    # Poprawione formatowanie stawki Kelly'ego do 2 miejsc po przecinku
+                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
@@ -650,13 +652,15 @@ with tab1:
 
         with col_b2:
             st.write(f"**{matched_away} (Gość)**")
-            st.write(f"Kurs Sprawiedliwy: **{fair_away}** | Bukmacher: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**")
+            # Poprawione formatowanie do 2 miejsc po przecinku
+            st.write(f"Kurs Sprawiedliwy: **{fair_away:.2f}** | Bukmacher: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**")
 
             if bookie_a_odds > 0:
                 ev_a = (res["prob_away"] * bookie_a_odds) - 1
                 kelly_stake_a = calculate_kelly_stake(bankroll, res["prob_away"], bookie_a_odds)
                 if ev_a > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a} PLN**")
+                    # Poprawione formatowanie stawki Kelly'ego do 2 miejsc po przecinku
+                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
