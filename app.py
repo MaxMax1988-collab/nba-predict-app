@@ -271,7 +271,7 @@ def auto_settle_bets():
                             for c in competitors:
                                 t_name = c.get("team", {}).get("displayName", "")
                                 score = int(c.get("score", 0))
-                                if c.get("homeAway"] == "home":
+                                if c.get("homeAway") == "home":
                                     h_team = t_name
                                     h_score = score
                                 else:
