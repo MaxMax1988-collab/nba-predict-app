@@ -737,7 +737,8 @@ with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
     if teams_dict:
         df = pd.DataFrame(list(teams_dict.values()))
-        df = df.sort_values(by="TEAM_NAME").reset_index(drop=True)
+        # Posortowane malejąco według Net Ratingu (od najlepszych do najgorszych)
+        df = df.sort_values(by="NET_RATING", ascending=False).reset_index(drop=True)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
