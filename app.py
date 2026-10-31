@@ -5,6 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from supabase import create_client, Client
+import altair as alt
 
 import xgboost as xgb
 import numpy as np
@@ -13,7 +14,7 @@ st.set_page_config(
     page_title="Advanced Multi-Factor NBA Predictor", page_icon="🏀", layout="wide"
 )
 
-# --- NOWOCZESNY DESIGN CSS (KARTY I WYGLĄD) ---
+# --- NOWOCZESNY DESIGN CSS (KARTY DIAGNOSTYCZNE I WYGLĄD) ---
 st.markdown("""
 <style>
     .stApp {
@@ -23,6 +24,46 @@ st.markdown("""
         border-radius: 8px;
         font-weight: 600;
         width: 100%;
+    }
+    /* Styl kart diagnostycznych w stylu nowoczesnych dashboardów */
+    .metric-card {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 18px 22px;
+        margin-bottom: 15px;
+    }
+    .metric-title {
+        color: #8b949e;
+        font-size: 14px;
+        font-weight: 500;
+        margin-bottom: 6px;
+    }
+    .metric-value {
+        color: #f0f6fc;
+        font-size: 32px;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }
+    .metric-badge-green {
+        display: inline-block;
+        background-color: rgba(46, 160, 67, 0.15);
+        color: #3fb950;
+        border-radius: 20px;
+        padding: 3px 10px;
+        font-size: 13px;
+        font-weight: 600;
+        margin-top: 8px;
+    }
+    .metric-badge-red {
+        display: inline-block;
+        background-color: rgba(248, 81, 73, 0.15);
+        color: #f85149;
+        border-radius: 20px;
+        padding: 3px 10px;
+        font-size: 13px;
+        font-weight: 600;
+        margin-top: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -742,57 +783,121 @@ with tab2:
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("🎯 Rejestr Typów i Automatyczna Analityka ROI (Zapis w Chmurze)")
+    st.subheader("📊 Krzywa Kapitału na żywo (Equity Curve)")
     bets = load_bets()
     if not bets:
         st.info("Brak zapisanych typów w bazie chmurowej Supabase.")
     else:
         df_bets = pd.DataFrame(bets)
-        st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
         settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
-            won = [b for b in settled if b.get("status") == "Wygrany"]
-            win_rate = (len(won) / len(settled)) * 100
-            total_staked = len(settled)
-            total_returns = sum([b.get("odds", 1.9) for b in won])
-            roi = ((total_returns - total_staked) / total_staked) * 100
-
-            st.markdown("---")
-            c_r1, c_r2, c_r3 = st.columns(3)
-            with c_r1:
-                st.metric("Rozliczone Typy", f"{len(settled)} / {len(bets)}")
-            with c_r2:
-                st.metric("Skuteczność (Win Rate)", f"{win_rate:.1f}%")
-            with c_r3:
-                st.metric("ROI", f"{roi:+.2f}%")
-
-            # --- WYKRES LINIOWY POSTĘPÓW ---
-            st.markdown("---")
-            st.subheader("📈 Wykres Liniowy Postępów (Skumulowany Wynik w Czasie)")
-            
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
+            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            win_rate = (len(won) / len(settled_sorted)) * 100
+            total_staked = len(settled_sorted)
+            total_returns = sum([b.get("odds", 1.9) for b in won])
+            total_profit = total_returns - total_staked
+            roi = ((total_returns - total_staked) / total_staked) * 100 if total_staked > 0 else 0.0
+
+            # --- NOWOCZESNE KARTY DIAGNOSTYCZNE ---
+            c_m1, c_m2 = st.columns(2)
+            with c_m1:
+                badge_class = "metric-badge-green" if total_profit >= 0 else "metric-badge-red"
+                sign = "+" if total_profit >= 0 else ""
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Łączny Zysk (PLN)</div>
+                    <div class="metric-value">{sign}{total_profit:.2f} PLN</div>
+                    <div class="{badge_class}">↑ {sign}{total_profit:.2f} PLN</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                badge_win = "metric-badge-green" if win_rate >= 50.0 else "metric-badge-red"
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Skuteczność (Win Rate)</div>
+                    <div class="metric-value">{win_rate:.1f}%</div>
+                    <div class="{badge_win}">↑ {len(won)}/{len(settled_sorted)}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with c_m2:
+                badge_roi = "metric-badge-green" if roi >= 0 else "metric-badge-red"
+                sign_roi = "+" if roi >= 0 else ""
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Wskaźnik ROI (%)</div>
+                    <div class="metric-value">{sign_roi}{roi:.2f}%</div>
+                    <div class="{badge_roi}">↑ {sign_roi}{roi:.2f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Suma Stawiona</div>
+                    <div class="metric-value">{total_staked * 10.0:.2f} PLN</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # --- EFEKTOWNY WYKRES ALTAIR (EQUITY CURVE) ---
+            st.markdown("---")
             chart_data = []
-            cum_profit = 0.0
+            current_capital = bankroll  # początkowy kapitał
+            
+            # Punkt startowy #0
+            chart_data.append({
+                "Liczba rozliczonych zakładów": 0,
+                "Kapitał (PLN)": round(current_capital, 2)
+            })
+
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
+                unit_stake = 10.0  # przelicznik jednostki
                 if b.get("status") == "Wygrany":
-                    cum_profit += (odds_val - 1.0)
+                    current_capital += (odds_val - 1.0) * unit_stake
                 else:
-                    cum_profit -= 1.0
-                
-                b_date = b.get("date", "Brak")
+                    current_capital -= unit_stake
+
                 chart_data.append({
-                    "Nr": i + 1,
-                    "Data / Mecz": f"#{i+1} ({b_date})",
-                    "Skumulowany Zysk (j.)": round(cum_profit, 2)
+                    "Liczba rozliczonych zakładów": i + 1,
+                    "Kapitał (PLN)": round(current_capital, 2)
                 })
-            
-            if chart_data:
-                df_chart = pd.DataFrame(chart_data)
-                df_chart = df_chart.set_index("Nr")
-                st.line_chart(df_chart[["Skumulowany Zysk (j.)"]])
+
+            df_chart = pd.DataFrame(chart_data)
+
+            # Wykres w stylu tradingowym (zielona linia + punkty + ciemne tło)
+            line = alt.Chart(df_chart).mark_line(
+                color='#00E676',
+                strokeWidth=3,
+                interpolate='monotone'
+            ).encode(
+                x=alt.X('Liczba rozliczonych zakładów:Q', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
+                y=alt.Y('Kapitał (PLN):Q', scale=alt.Scale(zero=False), axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
+                tooltip=['Liczba rozliczonych zakładów', 'Kapitał (PLN)']
+            )
+
+            points = alt.Chart(df_chart).mark_circle(
+                color='#00E676',
+                size=40
+            ).encode(
+                x='Liczba rozliczonych zakładów:Q',
+                y='Kapitał (PLN):Q'
+            )
+
+            chart_combined = (line + points).properties(
+                height=380
+            ).configure_view(
+                strokeWidth=0,
+                fill='#0d1117'
+            )
+
+            st.altair_chart(chart_combined, use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("📋 Historia Zapisanych Typów")
+        st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
         if st.button("Wyczyść całą bazę typów w chmurze"):
             clear_bets()
