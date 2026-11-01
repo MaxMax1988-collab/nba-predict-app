@@ -25,7 +25,6 @@ st.markdown("""
         font-weight: 600;
         width: 100%;
     }
-    /* Styl kart diagnostycznych w stylu nowoczesnych dashboardów */
     .metric-card {
         background-color: #161b22;
         border: 1px solid #30363d;
@@ -159,13 +158,9 @@ TEAM_NAME_MAPPING = {
     "Washington Wizards": "Washington Wizards",
 }
 
-# --- AUTOMATYCZNE POBIERANIE RAPORTU O KONTUZJACH (ESPN + INJURY ENDPOINT) ---
+# --- AUTOMATYCZNE POBIERANIE I PARSOWANIE RAPORTU O KONTUZJACH ---
 @st.cache_data(ttl=900)
 def fetch_live_injury_reports():
-    """
-    Automatycznie pobiera dane o kontuzjach i statusach zawodników w czasie rzeczywistym
-    z oficjalnych publicznych endpointów ESPN. Zwraca słownik kontuzjowanych graczy w podziale na drużyny.
-    """
     injuries_by_team = {}
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -175,7 +170,6 @@ def fetch_live_injury_reports():
             data = res.json()
             for event in data.get("events", []):
                 event_id = event.get("id")
-                # Pobieramy szczegółowy endpoint meczu zawierający strukturę kontuzji
                 summary_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={event_id}"
                 sum_res = requests.get(summary_url, headers=headers, timeout=3)
                 if sum_res.status_code == 200:
@@ -183,51 +177,32 @@ def fetch_live_injury_reports():
                     for team_inj in sum_data.get("injuries", []):
                         t_data = team_inj.get("team", {})
                         t_name = t_data.get("displayName", "")
-                        injured_list = []
                         for p in team_inj.get("injuries", []):
                             athlete = p.get("athlete", {})
                             p_name = athlete.get("displayName", "Unknown")
-                            status = p.get("status", "Out")
-                            details = p.get("details", "Brak szczegółów")
+                            
+                            raw_status = p.get("status", "Out")
+                            if isinstance(raw_status, dict):
+                                status_desc = raw_status.get("description", "OUT")
+                            else:
+                                status_desc = str(raw_status)
+
+                            injury_type = p.get("type", "Uraz")
+                            return_date = p.get("returnDate", "Brak terminu")
+                            details = f"Typ: {injury_type} | Powrót ok.: {return_date}"
+
                             if t_name not in injuries_by_team:
                                 injuries_by_team[t_name] = []
-                            injuries_by_team[t_name].append({
-                                "player": p_name,
-                                "status": status,
-                                "details": details
-                            })
+                            
+                            existing_players = [item['player'] for item in injuries_by_team[t_name]]
+                            if p_name not in existing_players:
+                                injuries_by_team[t_name].append({
+                                    "player": p_name,
+                                    "status": status_desc,
+                                    "details": details
+                                })
     except Exception:
         pass
-    
-    # Awaryjny fallback na wypadek braku sekcji w scoreboardzie - bezpośredni skan zespołów ESPN
-    if not injuries_by_team:
-        teams_url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams"
-        try:
-            res_t = requests.get(teams_url, headers=headers, timeout=4)
-            if res_t.status_code == 200:
-                for sport in res_t.json().get("sports", []):
-                    for league in sport.get("leagues", []):
-                        for team_item in league.get("teams", []):
-                            t_obj = team_item.get("team", {})
-                            t_name = t_obj.get("displayName", "")
-                            t_id = t_obj.get("id", "")
-                            # Pobieranie rosteru i kontuzji drużyny
-                            roster_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{t_id}/roster"
-                            r_res = requests.get(roster_url, headers=headers, timeout=2)
-                            if r_res.status_code == 200:
-                                for athlete in r_res.json().get("athletes", []):
-                                    if athlete.get("injuries"):
-                                        if t_name not in injuries_by_team:
-                                            injuries_by_team[t_name] = []
-                                        for inj in athlete.get("injuries", []):
-                                            injuries_by_team[t_name].append({
-                                                "player": athlete.get("displayName"),
-                                                "status": inj.get("status", "Out"),
-                                                "details": inj.get("details", "")
-                                            })
-        except Exception:
-            pass
-
     return injuries_by_team
 
 # --- OPERACJE NA BAZIE CHMUROWEJ SUPABASE ---
@@ -547,16 +522,14 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     home_injury_penalty = 0.0
     away_injury_penalty = 0.0
 
-    # Dynamiczne odliczenie za graczy ze statusem Out
     for inj in home_injuries:
         if inj.get("status", "").lower() in ["out", "doubtful"]:
-            home_injury_penalty += 3.5  # Ubytek za każdego kontuzjowanego zawodnika rotacji
+            home_injury_penalty += 3.5
 
     for inj in away_injuries:
         if inj.get("status", "").lower() in ["out", "doubtful"]:
             away_injury_penalty += 3.5
 
-    # Aplikowanie ubytków do potencjału ofensywnego
     h_off = max(85.0, h_off - home_injury_penalty)
     a_off = max(85.0, a_off - away_injury_penalty)
 
@@ -926,7 +899,6 @@ with tab3:
             total_profit = total_returns - total_staked
             roi = ((total_returns - total_staked) / total_staked) * 100 if total_staked > 0 else 0.0
 
-            # --- NOWOCZESNE KARTY DIAGNOSTYCZNE ---
             c_m1, c_m2 = st.columns(2)
             with c_m1:
                 badge_class = "metric-badge-green" if total_profit >= 0 else "metric-badge-red"
@@ -966,7 +938,6 @@ with tab3:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # --- EFEKTOWNY WYKRES ALTAIR (EQUITY CURVE) ---
             st.markdown("---")
             chart_data = []
             current_capital = bankroll
