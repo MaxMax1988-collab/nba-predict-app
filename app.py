@@ -181,15 +181,22 @@ def fetch_live_injury_reports():
                             athlete = p.get("athlete", {})
                             p_name = athlete.get("displayName", "Unknown")
                             
+                            # Czyste wyciąganie statusu (bez słowników)
                             raw_status = p.get("status", "Out")
                             if isinstance(raw_status, dict):
                                 status_desc = raw_status.get("description", "OUT")
                             else:
                                 status_desc = str(raw_status)
 
-                            injury_type = p.get("type", "Uraz")
+                            # Czyste wyciąganie typu urazu (bez słowników JSON)
+                            raw_type = p.get("type", "Uraz")
+                            if isinstance(raw_type, dict):
+                                injury_type = raw_type.get("description") or raw_type.get("name", "Uraz")
+                            else:
+                                injury_type = str(raw_type)
+
                             return_date = p.get("returnDate", "Brak terminu")
-                            details = f"Typ: {injury_type} | Powrót ok.: {return_date}"
+                            details = f"Rodzaj: {injury_type} | Powrót ok.: {return_date}"
 
                             if t_name not in injuries_by_team:
                                 injuries_by_team[t_name] = []
@@ -273,7 +280,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     
     error_logs = {}
@@ -327,7 +334,7 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -505,7 +512,7 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
-# --- PREDYKCJA Z ZAAWANSOWANYM XGBOOST ORAZ DYNAMICZNĄ KOREKTĄ KONTUZJI ---
+# --- PREDYKCJA Z ZAAWANSOWANYM XGBOOST ORAZ INTELIGENTNĄ WAGĄ KONTUZJI ---
 def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, home_b2b=False, away_b2b=False):
     home_team = teams_dict.get(home_team_name, {})
     away_team = teams_dict.get(away_team_name, {})
@@ -515,20 +522,31 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     a_off = away_team.get("AVG_PTS_FOR", 112.0)
     a_def = away_team.get("AVG_PTS_AGAINST", 112.0)
 
-    # --- AUTOMATYCZNA KOREKTA POTENCJAŁU NA PODSTAWIE INJURY REPORTU ---
+    # --- INTELIGENTNY, ZRÓŻNICOWANY SYSTEM WAG KONTUZJI ---
     home_injuries = injury_reports.get(home_team_name, [])
     away_injuries = injury_reports.get(away_team_name, [])
 
     home_injury_penalty = 0.0
     away_injury_penalty = 0.0
 
-    for inj in home_injuries:
+    # Dynamiczne ważenie: 1. kontuzjowany gracz (lider/gwiazda) = 5.0 pkt, 2. = 3.5 pkt, kolejne = 1.5 pkt
+    for idx, inj in enumerate(home_injuries):
         if inj.get("status", "").lower() in ["out", "doubtful"]:
-            home_injury_penalty += 3.5
+            if idx == 0:
+                home_injury_penalty += 5.0
+            elif idx == 1:
+                home_injury_penalty += 3.5
+            else:
+                home_injury_penalty += 1.5
 
-    for inj in away_injuries:
+    for idx, inj in enumerate(away_injuries):
         if inj.get("status", "").lower() in ["out", "doubtful"]:
-            away_injury_penalty += 3.5
+            if idx == 0:
+                away_injury_penalty += 5.0
+            elif idx == 1:
+                away_injury_penalty += 3.5
+            else:
+                away_injury_penalty += 1.5
 
     h_off = max(85.0, h_off - home_injury_penalty)
     a_off = max(85.0, a_off - away_injury_penalty)
@@ -620,7 +638,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Auto Injuries + O/U)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Smart Injuries + O/U)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -629,7 +647,7 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 System (XGBoost + Auto Injury Report + Supabase) Aktywny")
+st.sidebar.success("🟢 System (XGBoost + Smart Injury Weighting + Supabase) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -649,7 +667,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Automatyczny Injury Report + Moneyline + Kelly)")
+    st.subheader("Nadchodzące mecze (Smart Injury Weights + Moneyline + Kelly)")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -888,7 +906,7 @@ with tab3:
     else:
         df_bets = pd.DataFrame(bets)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
