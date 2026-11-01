@@ -189,12 +189,15 @@ def fetch_live_injury_reports():
 
                             raw_type = p.get("type", "Uraz")
                             if isinstance(raw_type, dict):
-                                injury_type = raw_type.get("description") or raw_type.get("name", "Uraz")
+                                injury_type = raw_type.get("name") or raw_type.get("description", "Uraz")
                             else:
                                 injury_type = str(raw_type)
 
+                            if injury_type.lower() in ["out", "injury_status_out"]:
+                                injury_type = "Brak szczegółów urazu"
+
                             return_date = p.get("returnDate", "Brak terminu")
-                            details = f"Rodzaj: {injury_type} | Powrót ok.: {return_date}"
+                            details = f"Szczegóły: {injury_type} | Powrót ok.: {return_date}"
 
                             if t_name not in injuries_by_team:
                                 injuries_by_team[t_name] = []
