@@ -181,14 +181,12 @@ def fetch_live_injury_reports():
                             athlete = p.get("athlete", {})
                             p_name = athlete.get("displayName", "Unknown")
                             
-                            # Czyste wyciąganie statusu (bez słowników)
                             raw_status = p.get("status", "Out")
                             if isinstance(raw_status, dict):
                                 status_desc = raw_status.get("description", "OUT")
                             else:
                                 status_desc = str(raw_status)
 
-                            # Czyste wyciąganie typu urazu (bez słowników JSON)
                             raw_type = p.get("type", "Uraz")
                             if isinstance(raw_type, dict):
                                 injury_type = raw_type.get("description") or raw_type.get("name", "Uraz")
@@ -280,7 +278,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
     ]
     
     error_logs = {}
@@ -334,7 +332,7 @@ def update_model_weights_from_bets():
 
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -529,7 +527,6 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     home_injury_penalty = 0.0
     away_injury_penalty = 0.0
 
-    # Dynamiczne ważenie: 1. kontuzjowany gracz (lider/gwiazda) = 5.0 pkt, 2. = 3.5 pkt, kolejne = 1.5 pkt
     for idx, inj in enumerate(home_injuries):
         if inj.get("status", "").lower() in ["out", "doubtful"]:
             if idx == 0:
@@ -906,7 +903,7 @@ with tab3:
     else:
         df_bets = pd.DataFrame(bets)
 
-        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
+        settled = [b for b in bets if b.get("status") != "Oczekujący"]
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
