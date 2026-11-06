@@ -1027,7 +1027,7 @@ with tab4:
     st.info("Terminal analizuje wkład procentowy i zwrot z inwestycji (ROI) w podziale na kategorie: Zwycięzca (ML), Over/Under oraz Handicap.")
 
     bets = load_bets()
-    settled_bets = [b for b in bets if b.get("status"] in ["Wygrany", "Przegrany"]]
+    settled_bets = [b for b in bets if b.get("status") in ["Wygrany", "Przegrany"]]
 
     if not settled_bets:
         st.info("Brak rozliczonych zakładów w bazie do wygenerowania analizy terminalowej.")
