@@ -599,7 +599,7 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
