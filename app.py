@@ -1039,7 +1039,7 @@ with tab4:
             cat_bets = [b for b in settled_bets if classify_pick_type(b.get("pick", "")) == cat]
             total_cat = len(cat_bets)
             if total_cat > 0:
-                won_cat = len([b for b in cat_bets if b.get("status"] == "Wygrany"])
+                won_cat = len([b for b in cat_bets if b.get("status") == "Wygrany"])
                 win_rate_cat = (won_cat / total_cat) * 100
                 staked_cat = total_cat * 10.0
                 returns_cat = sum([(b.get("odds", 1.9) * 10.0) for b in cat_bets if b.get("status"] == "Wygrany"])
