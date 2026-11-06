@@ -1042,7 +1042,7 @@ with tab4:
                 won_cat = len([b for b in cat_bets if b.get("status") == "Wygrany"])
                 win_rate_cat = (won_cat / total_cat) * 100
                 staked_cat = total_cat * 10.0
-                returns_cat = sum([(b.get("odds", 1.9) * 10.0) for b in cat_bets if b.get("status"] == "Wygrany"])
+                returns_cat = sum([(b.get("odds", 1.9) * 10.0) for b in cat_bets if b.get("status") == "Wygrany"])
                 profit_cat = returns_cat - staked_cat
                 roi_cat = (profit_cat / staked_cat) * 100
             else:
