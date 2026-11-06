@@ -158,17 +158,8 @@ TEAM_NAME_MAPPING = {
     "Washington Wizards": "Washington Wizards",
 }
 
-def classify_pick_type(pick):
-    p_lower = pick.lower()
-    if 'over' in p_lower or 'under' in p_lower:
-        return 'Over/Under'
-    elif '(' in pick and ')' in pick and any(c.isdigit() for c in pick):
-        return 'Handicap'
-    else:
-        return 'Zwycięzca (ML)'
-
 # --- AUTOMATYCZNE POBIERANIE I PARSOWANIE RAPORTU O KONTUZJACH ---
-@st.cache_data(ttl=7200)
+@st.cache_data(ttl=900)
 def fetch_live_injury_reports():
     injuries_by_team = {}
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
@@ -317,8 +308,7 @@ def update_model_weights_from_bets():
         if a_team not in error_logs:
             error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
-        pt_type = classify_pick_type(pick)
-        if status == "Przegrany" and pt_type == "Zwycięzca (ML)":
+        if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
             if pick == h_team:
                 error_logs[h_team]["off_corr"] -= lr
                 error_logs[a_team]["def_corr"] += lr
@@ -326,7 +316,7 @@ def update_model_weights_from_bets():
                 error_logs[a_team]["off_corr"] -= lr
                 error_logs[h_team]["def_corr"] += lr
 
-        elif status == "Przegrany" and pt_type == "Over/Under":
+        elif status == "Przegrany" and ("Over" in pick or "Under" in pick):
             try:
                 parts_score = score_str.split(":")
                 actual_total = float(parts_score[0]) + float(parts_score[1])
@@ -398,10 +388,7 @@ def auto_settle_bets():
 
                                         if diff_days <= 1:
                                             pick = bet.get("pick")
-                                            pt_type = classify_pick_type(pick)
-                                            score_str = f"{a_score}:{h_score}"
-
-                                            if pt_type == "Over/Under":
+                                            if "Over" in pick or "Under" in pick:
                                                 total_points = h_score + a_score
                                                 try:
                                                     parts = pick.split(" ")
@@ -411,27 +398,11 @@ def auto_settle_bets():
                                                     new_status = "Wygrany" if won_cond else "Przegrany"
                                                 except:
                                                     new_status = "Oczekujący"
-                                            elif pt_type == "Handicap":
-                                                try:
-                                                    # Format np. Team Name (+5.5) lub Team Name (-3.0)
-                                                    team_part = pick.split("(")[0].strip()
-                                                    spread_str = pick.split("(")[1].replace(")", "").strip()
-                                                    spread_val = float(spread_str)
-
-                                                    if team_part == h_team:
-                                                        adjusted_score = h_score + spread_val
-                                                        new_status = "Wygrany" if adjusted_score > a_score else "Przegrany"
-                                                    elif team_part == a_team:
-                                                        adjusted_score = a_score + spread_val
-                                                        new_status = "Wygrany" if adjusted_score > h_score else "Przegrany"
-                                                    else:
-                                                        new_status = "Oczekujący"
-                                                except:
-                                                    new_status = "Oczekujący"
                                             else:
                                                 winner = h_team if h_score > a_score else a_team
                                                 new_status = "Wygrany" if pick == winner else "Przegrany"
 
+                                            score_str = f"{a_score}:{h_score}"
                                             update_bet_status(bet.get("id"), new_status, score_str)
         except Exception:
             pass
@@ -552,6 +523,7 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     a_off = away_team.get("AVG_PTS_FOR", 112.0)
     a_def = away_team.get("AVG_PTS_AGAINST", 112.0)
 
+    # --- INTELIGENTNY, ZRÓŻNICOWANY SYSTEM WAG KONTUZJI ---
     home_injuries = injury_reports.get(home_team_name, [])
     away_injuries = injury_reports.get(away_team_name, [])
 
@@ -619,12 +591,13 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     expected_diff = expected_home_pts - expected_away_pts
     base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     
+    # --- XGBOOST BOOST ---
     try:
         bets = load_bets()
         settled_moneyline = [
             b for b in bets 
             if b.get("status") in ["Wygrany", "Przegrany"] 
-            and classify_pick_type(b.get("pick", "")) == "Zwycięzca (ML)"
+            and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
         ]
         
         if len(settled_moneyline) >= 10:
@@ -665,7 +638,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Smart Injuries + Handikapy + Terminal)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Smart Injuries + O/U)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -686,16 +659,15 @@ try:
 except Exception:
     pass
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
     "🎯 Rejestr Typów & ROI",
-    "📈 Terminal Analityczny",
     "🧠 Stan Samouczenia Modelu (XGBoost)",
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Smart Injury Weights + Moneyline + Handicaps + Kelly)")
+    st.subheader("Nadchodzące mecze (Smart Injury Weights + Moneyline + Kelly)")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -740,6 +712,20 @@ with tab1:
                     break
 
         if matched_home not in teams_dict:
+            home_mascot = raw_home.strip().lower().split()[-1]
+            for t_name in teams_dict.keys():
+                if home_mascot in t_name.lower():
+                    matched_home = t_name
+                    break
+
+        if matched_away not in teams_dict:
+            away_mascot = raw_away.strip().lower().split()[-1]
+            for t_name in teams_dict.keys():
+                if away_mascot in t_name.lower():
+                    matched_away = t_name
+                    break
+
+        if matched_home not in teams_dict:
             matched_home = list(teams_dict.keys())[0]
         if matched_away not in teams_dict:
             matched_away = list(teams_dict.keys())[1]
@@ -749,6 +735,7 @@ with tab1:
 
         res = predict_matchup(matched_home, matched_away, teams_dict, injury_reports, home_b2b, away_b2b)
 
+        # --- SEKCJA RAPORTU O KONTUZJACH W UI ---
         st.markdown("### 🏥 Automatyczny Raport o Kontuzjach (Injury Report)")
         col_i1, col_i2 = st.columns(2)
         with col_i1:
@@ -828,7 +815,7 @@ with tab1:
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
-                if st.button("➕ Zapisz typ gospodarza (ML)"):
+                if st.button("➕ Zapisz typ gospodarza"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_home, bookie_h_odds)
                     st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
@@ -845,7 +832,7 @@ with tab1:
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
-                if st.button("➕ Zapisz typ gościa (ML)"):
+                if st.button("➕ Zapisz typ gościa"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_away, bookie_a_odds)
                     st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
@@ -893,10 +880,16 @@ with tab1:
         st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
         st.write(f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):** **{recommended_team} ({safe_spread:+.1f})**")
 
-        if st.button(f"➕ Zapisz handicap: {recommended_team} ({safe_spread:+.1f})"):
-            save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"{recommended_team} ({safe_spread:+.1f})", 1.90)
-            st.success("Zapisano handicap do bazy Supabase!")
-            st.rerun()
+        if spread_bookie_line != 0.0:
+            if spread_team == recommended_team:
+                bookie_team_spread = spread_bookie_line
+            else:
+                bookie_team_spread = -spread_bookie_line
+
+            if bookie_team_spread > safe_spread:
+                st.success(f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię ({bookie_team_spread:+.1f}) dla {recommended_team}!")
+            else:
+                st.info("ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego zapasu.")
 
 with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
@@ -1023,61 +1016,6 @@ with tab3:
             st.rerun()
 
 with tab4:
-    st.subheader("📈 Terminal Analityczny & Raporty Skuteczności")
-    st.info("Terminal analizuje wkład procentowy i zwrot z inwestycji (ROI) w podziale na kategorie: Zwycięzca (ML), Over/Under oraz Handicap.")
-
-    bets = load_bets()
-    settled_bets = [b for b in bets if b.get("status") in ["Wygrany", "Przegrany"]]
-
-    if not settled_bets:
-        st.info("Brak rozliczonych zakładów w bazie do wygenerowania analizy terminalowej.")
-    else:
-        categories = ["Zwycięzca (ML)", "Over/Under", "Handicap"]
-        terminal_data = []
-
-        for cat in categories:
-            cat_bets = [b for b in settled_bets if classify_pick_type(b.get("pick", "")) == cat]
-            total_cat = len(cat_bets)
-            if total_cat > 0:
-                won_cat = len([b for b in cat_bets if b.get("status") == "Wygrany"])
-                win_rate_cat = (won_cat / total_cat) * 100
-                staked_cat = total_cat * 10.0
-                returns_cat = sum([(b.get("odds", 1.9) * 10.0) for b in cat_bets if b.get("status") == "Wygrany"])
-                profit_cat = returns_cat - staked_cat
-                roi_cat = (profit_cat / staked_cat) * 100
-            else:
-                won_cat, win_rate_cat, staked_cat, returns_cat, profit_cat, roi_cat = 0, 0.0, 0.0, 0.0, 0.0, 0.0
-
-            terminal_data.append({
-                "Kategoria Rynku": cat,
-                "Liczba Zakładów": total_cat,
-                "Wygrane": won_cat,
-                "Skuteczność (%)": round(win_rate_cat, 2),
-                "Zysk / Strata (PLN)": round(profit_cat, 2),
-                "ROI (%)": round(roi_cat, 2)
-            })
-
-        df_terminal = pd.DataFrame(terminal_data)
-        st.dataframe(df_terminal, use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-        st.subheader("📋 Automatyczny Raport i Wnioski Analityczne")
-
-        # Najlepsza kategoria
-        valid_cats = [d for d in terminal_data if d["Liczba Zakładów"] > 0]
-        if valid_cats:
-            best_cat = max(valid_cats, key=lambda x: x["ROI (%)"])
-            worst_cat = min(valid_cats, key=lambda x: x["ROI (%)"])
-
-            st.markdown(f"""
-            * **Najbardziej zyskowna kategoria:** `{best_cat['Kategoria Rynku']}` z ROI na poziomie **{best_cat['ROI (%)']}%** (Skuteczność: {best_cat['Skuteczność (%)']}%)[span_0](start_span)[span_0](end_span)[span_1](start_span)[span_1](end_span).
-            * **Najsłabsza kategoria:** `{worst_cat['Kategoria Rynku']}` z ROI na poziomie **{worst_cat['ROI (%)']}%**.
-            * **Wniosek operacyjny:** System rekomenduje skupienie się na typach z kategorii z dodatnim ROI oraz ostrożniejsze podejście do rynków o ujemnej stopie zwrotu.
-            """)
-        else:
-            st.info("Za mało danych do wygenerowania zaawansowanych wniosków.")
-
-with tab5:
     st.subheader("🧠 Stan Samouczenia Modelu (XGBoost Classifier)")
     st.info("🤖 Potężny silnik XGBoost analizuje Twoje zebrane typy w Supabase i optymalizuje predykcje.")
     
