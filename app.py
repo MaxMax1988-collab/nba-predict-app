@@ -168,7 +168,7 @@ def classify_pick_type(pick):
         return 'Zwycięzca (ML)'
 
 # --- AUTOMATYCZNE POBIERANIE I PARSOWANIE RAPORTU O KONTUZJACH ---
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=7200)
 def fetch_live_injury_reports():
     injuries_by_team = {}
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
