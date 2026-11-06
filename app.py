@@ -333,14 +333,13 @@ def update_model_weights_from_bets():
 
     save_model_weights(error_logs)
 
-# --- W 100% BEZPIECZNA I PRECYZYJNA AUTOMATYZACJA ROZLICZANIA ---
+# --- BEZPIECZNA AUTOMATYZACJA ROZLICZANIA TYLKO DLA UNIKALNYCH DAT ---
 def auto_settle_bets():
     bets = load_bets()
     pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
-    # Wyciągamy TYLKO unikalne daty z oczekujących typów (brak przeszukiwania "w ciemno")
     pending_dates = set(b.get("date") for b in pending_bets if b.get("date"))
 
     for date_obj_str in pending_dates:
@@ -357,12 +356,10 @@ def auto_settle_bets():
             if res.status_code == 200:
                 events = res.json().get("events", [])
                 for event in events:
-                    # 1. Twardy warunek: mecz musi mieć oficjalny status zakończenia w lidze
                     status_type = event.get("status", {}).get("type", {}).get("completed", False)
                     if not status_type:
                         continue
 
-                    # 2. Twardy warunek: data meczu z API musi idealnie zgadzać się z datą zakładu
                     event_date_raw = event.get("date", "")[:10]
                     if event_date_raw != date_obj_str:
                         continue
@@ -647,16 +644,19 @@ bankroll = st.sidebar.number_input(
 
 st.sidebar.success("🟢 System (XGBoost + Smart Injury Weighting + Supabase) Aktywny")
 
-# Szybkie ładowanie danych
+# Ładowanie danych głównych
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
 injury_reports = fetch_live_injury_reports()
 
-try:
-    auto_settle_bets()
-    update_model_weights_from_bets()
-except Exception:
-    pass
+# --- ZABEZPIECZENIE SESJI: AUTOMATYZACJA WYKONUJE SIĘ TYLKO RAZ NA WEJŚCIE ---
+if "settled_done" not in st.session_state:
+    try:
+        auto_settle_bets()
+        update_model_weights_from_bets()
+    except Exception:
+        pass
+    st.session_state["settled_done"] = True
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
