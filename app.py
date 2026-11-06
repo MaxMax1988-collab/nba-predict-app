@@ -336,7 +336,7 @@ def update_model_weights_from_bets():
 # --- NAPRAWIONA, BEZPIECZNA AUTOMATYZACJA ROZLICZANIA BEZ BŁĘDÓW DAT ---
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
