@@ -165,13 +165,13 @@ def fetch_live_injury_reports():
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, headers=headers, timeout=4)
         if res.status_code == 200:
             data = res.json()
             for event in data.get("events", []):
                 event_id = event.get("id")
                 summary_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={event_id}"
-                sum_res = requests.get(summary_url, headers=headers, timeout=3)
+                sum_res = requests.get(summary_url, headers=headers, timeout=2)
                 if sum_res.status_code == 200:
                     sum_data = sum_res.json()
                     for team_inj in sum_data.get("injuries", []):
@@ -281,7 +281,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     
     error_logs = {}
@@ -333,77 +333,74 @@ def update_model_weights_from_bets():
 
     save_model_weights(error_logs)
 
+# --- NAPRAWIONA, BEZPIECZNA AUTOMATYZACJA ROZLICZANIA BEZ BŁĘDÓW DAT ---
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
     today = datetime.now()
+    # Sprawdzamy TYLKO dzisiejszy oraz wczorajszy dzień (dla nocnych meczów NBA)
     dates_to_check = [
-        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(5)
+        today.strftime("%Y%m%d"),
+        (today - timedelta(days=1)).strftime("%Y%m%d")
     ]
 
     for date_str in dates_to_check:
         url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
         headers = {"User-Agent": "Mozilla/5.0"}
         try:
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=4)
             if res.status_code == 200:
                 events = res.json().get("events", [])
                 for event in events:
-                    status_type = (
-                        event.get("status", {}).get("type", {}).get("completed", False)
-                    )
-                    if status_type:
-                        competitions = event.get("competitions", [])
-                        if competitions:
-                            comp = competitions[0]
-                            competitors = comp.get("competitors", [])
-                            h_team, a_team, h_score, a_score = None, None, 0, 0
-                            for c in competitors:
-                                t_name = c.get("team", {}).get("displayName", "")
-                                score = int(c.get("score", 0))
-                                if c.get("homeAway") == "home":
-                                    h_team = t_name
-                                    h_score = score
-                                else:
-                                    a_team = t_name
-                                    a_score = score
+                    # 1. Twardy warunek: mecz musi być w 100% zakończony przez ligę
+                    status_type = event.get("status", {}).get("type", {}).get("completed", False)
+                    if not status_type:
+                        continue
 
-                            event_date_raw = event.get("date", "")[:10]
+                    competitions = event.get("competitions", [])
+                    if competitions:
+                        comp = competitions[0]
+                        competitors = comp.get("competitors", [])
+                        h_team, a_team, h_score, a_score = None, None, 0, 0
+                        for c in competitors:
+                            t_name = c.get("team", {}).get("displayName", "")
+                            score = int(c.get("score", 0))
+                            if c.get("homeAway"] == "home":
+                                h_team = t_name
+                                h_score = score
+                            else:
+                                a_team = t_name
+                                a_score = score
 
-                            if h_team and a_team:
-                                for bet in pending_bets:
-                                    match_str = bet.get("match", "")
-                                    bet_date = bet.get("date", "")
+                        event_date_raw = event.get("date", "")[:10]
 
-                                    if a_team in match_str and h_team in match_str:
+                        if h_team and a_team:
+                            for bet in pending_bets:
+                                match_str = bet.get("match", "")
+                                bet_date = bet.get("date", "")
+
+                                # 2. Twardy warunek: data w bazie typów musi idealnie pokrywać się z datą meczu z API
+                                if bet_date == event_date_raw and a_team in match_str and h_team in match_str:
+                                    pick = bet.get("pick")
+                                    if "Over" in pick or "Under" in pick:
+                                        total_points = h_score + a_score
                                         try:
-                                            b_dt = datetime.strptime(bet_date, "%Y-%m-%d")
-                                            e_dt = datetime.strptime(event_date_raw, "%Y-%m-%d")
-                                            diff_days = abs((b_dt - e_dt).days)
+                                            parts = pick.split(" ")
+                                            line_val = float(parts[1])
+                                            is_over = parts[0] == "Over"
+                                            won_cond = total_points > line_val if is_over else total_points < line_val
+                                            new_status = "Wygrany" if won_cond else "Przegrany"
                                         except:
-                                            diff_days = 0
+                                            new_status = "Oczekujący"
+                                    else:
+                                        winner = h_team if h_score > a_score else a_team
+                                        new_status = "Wygrany" if pick == winner else "Przegrany"
 
-                                        if diff_days <= 1:
-                                            pick = bet.get("pick")
-                                            if "Over" in pick or "Under" in pick:
-                                                total_points = h_score + a_score
-                                                try:
-                                                    parts = pick.split(" ")
-                                                    line_val = float(parts[1])
-                                                    is_over = parts[0] == "Over"
-                                                    won_cond = total_points > line_val if is_over else total_points < line_val
-                                                    new_status = "Wygrany" if won_cond else "Przegrany"
-                                                except:
-                                                    new_status = "Oczekujący"
-                                            else:
-                                                winner = h_team if h_score > a_score else a_team
-                                                new_status = "Wygrany" if pick == winner else "Przegrany"
-
-                                            score_str = f"{a_score}:{h_score}"
-                                            update_bet_status(bet.get("id"), new_status, score_str)
+                                    score_str = f"{a_score}:{h_score}"
+                                    update_bet_status(bet.get("id"), new_status, score_str)
         except Exception:
             pass
 
@@ -416,7 +413,7 @@ def fetch_nba_standings():
 
     teams_dict = {}
     try:
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, headers=headers, timeout=4)
         res.raise_for_status()
         data = res.json()
 
@@ -430,7 +427,7 @@ def fetch_nba_standings():
 
                 def get_stat(name, default=0.0):
                     for s in stats_list:
-                        if s.get("name") == name:
+                        if s.get("name"] == name:
                             return float(s.get("value", default))
                     return float(default)
 
@@ -489,7 +486,7 @@ def fetch_live_odds(api_key):
         return []
     url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, timeout=4)
         if res.status_code == 200:
             return res.json()
         else:
@@ -502,7 +499,7 @@ def check_if_team_played_yesterday(team_name):
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={yesterday}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        res = requests.get(url, headers=headers, timeout=3)
+        res = requests.get(url, headers=headers, timeout=2)
         if res.status_code == 200:
             events = res.json().get("events", [])
             for event in events:
@@ -602,7 +599,7 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
@@ -649,6 +646,7 @@ bankroll = st.sidebar.number_input(
 
 st.sidebar.success("🟢 System (XGBoost + Smart Injury Weighting + Supabase) Aktywny")
 
+# Optymalizacja czasu startu: wywołania z buforowaniem i bezpiecznymi timeoutami
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
 injury_reports = fetch_live_injury_reports()
@@ -777,26 +775,26 @@ with tab1:
         if bookmakers:
             for bookie in bookmakers:
                 for market in bookie.get("markets", []):
-                    if market.get("key") == "h2h":
+                    if market.get("key"] == "h2h":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 bookie_h_odds = float(out.get("price", 1.9))
                             elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
                                 bookie_a_odds = float(out.get("price", 1.9))
-                    elif market.get("key") == "spreads":
+                    elif market.get("key"] == "spreads":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
-                    elif market.get("key") == "totals":
+                    elif market.get("key"] == "totals":
                         for out in market.get("outcomes", []):
-                            if out.get("name") == "Over":
+                            if out.get("name"] == "Over":
                                 total_bookie_line = float(out.get("point", 220.0))
                                 total_over_odds = float(out.get("price", 1.9))
-                            elif out.get("name") == "Under":
+                            elif out.get("name"] == "Under":
                                 total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res.get("prob_home"), 2)
@@ -906,11 +904,11 @@ with tab3:
     else:
         df_bets = pd.DataFrame(bets)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
@@ -968,7 +966,7 @@ with tab3:
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
                 unit_stake = 10.0
-                if b.get("status") == "Wygrany":
+                if b.get("status"] == "Wygrany":
                     current_capital += (odds_val - 1.0) * unit_stake
                 else:
                     current_capital -= unit_stake
