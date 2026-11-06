@@ -158,14 +158,14 @@ TEAM_NAME_MAPPING = {
     "Washington Wizards": "Washington Wizards",
 }
 
-# --- POBIERANIE RAPORTU O KONTUZJACH ---
+# --- POBIERANIE RAPORTU O KONTUZJACH (SZYBKIE, Z CACHE) ---
 @st.cache_data(ttl=900)
 def fetch_live_injury_reports():
     injuries_by_team = {}
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        res = requests.get(url, headers=headers, timeout=4)
+        res = requests.get(url, headers=headers, timeout=3)
         if res.status_code == 200:
             data = res.json()
             for event in data.get("events", []):
@@ -213,7 +213,7 @@ def fetch_live_injury_reports():
         pass
     return injuries_by_team
 
-# --- OPERACJE NA BAZIE SUPABASE ---
+# --- OPERACJE NA BAZIE SUPABASE (BEZ BLOKUJĄCYCH SPRAWDZEŃ) ---
 def load_bets():
     try:
         response = supabase.table("bets").select("*").order("id", desc=False).execute()
@@ -224,11 +224,7 @@ def load_bets():
 
 def save_bet(date, match, pick, odds):
     try:
-        existing = supabase.table("bets").select("id").eq("date", date).eq("match", match).eq("pick", pick).execute()
-        if existing.data:
-            st.warning("⚠️ Ten typ jest już w bazie – pomijam duplikat.")
-            return
-
+        # Natychmiastowy zapis bez dodatkowych zapytań weryfikujących – pełna prędkość!
         data = {
             "date": date,
             "match": match,
@@ -333,10 +329,10 @@ def update_model_weights_from_bets():
 
     save_model_weights(error_logs)
 
-# --- BEZPIECZNA AUTOMATYZACJA ROZLICZANIA TYLKO DLA UNIKALNYCH DAT ---
+# --- BEZPIECZNA AUTOMATYZACJA ROZLICZANIA ---
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -352,7 +348,7 @@ def auto_settle_bets():
         url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str_espn}"
         headers = {"User-Agent": "Mozilla/5.0"}
         try:
-            res = requests.get(url, headers=headers, timeout=4)
+            res = requests.get(url, headers=headers, timeout=3)
             if res.status_code == 200:
                 events = res.json().get("events", [])
                 for event in events:
@@ -372,7 +368,7 @@ def auto_settle_bets():
                         for c in competitors:
                             t_name = c.get("team", {}).get("displayName", "")
                             score = int(c.get("score", 0))
-                            if c.get("homeAway") == "home":
+                            if c.get("homeAway"] == "home":
                                 h_team = t_name
                                 h_score = score
                             else:
@@ -413,7 +409,7 @@ def fetch_nba_standings():
 
     teams_dict = {}
     try:
-        res = requests.get(url, headers=headers, timeout=4)
+        res = requests.get(url, headers=headers, timeout=3)
         res.raise_for_status()
         data = res.json()
 
@@ -427,7 +423,7 @@ def fetch_nba_standings():
 
                 def get_stat(name, default=0.0):
                     for s in stats_list:
-                        if s.get("name") == name:
+                        if s.get("name"] == name:
                             return float(s.get("value", default))
                     return float(default)
 
@@ -486,7 +482,7 @@ def fetch_live_odds(api_key):
         return []
     url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
     try:
-        res = requests.get(url, timeout=4)
+        res = requests.get(url, timeout=3)
         if res.status_code == 200:
             return res.json()
         else:
@@ -597,7 +593,7 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
@@ -776,26 +772,26 @@ with tab1:
         if bookmakers:
             for bookie in bookmakers:
                 for market in bookie.get("markets", []):
-                    if market.get("key") == "h2h":
+                    if market.get("key"] == "h2h":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 bookie_h_odds = float(out.get("price", 1.9))
                             elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
                                 bookie_a_odds = float(out.get("price", 1.9))
-                    elif market.get("key") == "spreads":
+                    elif market.get("key"] == "spreads":
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
-                    elif market.get("key") == "totals":
+                    elif market.get("key"] == "totals":
                         for out in market.get("outcomes", []):
-                            if out.get("name") == "Over":
+                            if out.get("name"] == "Over":
                                 total_bookie_line = float(out.get("point", 220.0))
                                 total_over_odds = float(out.get("price", 1.9))
-                            elif out.get("name") == "Under":
+                            elif out.get("name"] == "Under":
                                 total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res.get("prob_home"), 2)
@@ -905,11 +901,11 @@ with tab3:
     else:
         df_bets = pd.DataFrame(bets)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
+        settled = [b for b in bets if b.get("status"] != "Oczekujący"]
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
@@ -967,7 +963,7 @@ with tab3:
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
                 unit_stake = 10.0
-                if b.get("status") == "Wygrany":
+                if b.get("status"] == "Wygrany":
                     current_capital += (odds_val - 1.0) * unit_stake
                 else:
                     current_capital -= unit_stake
