@@ -277,7 +277,7 @@ def update_model_weights_from_bets():
 
     save_model_weights(error_logs)
 
-# --- BEZPIECZNE ROZLICZANIE POPRZEZ THE ODDS API (BEZ BŁĘDÓW ESPN) ---
+# --- BEZPIECZNE ROZLICZANIE POPRZEZ THE ODDS API ---
 def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
@@ -426,7 +426,6 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- PREDYKCJA Z ZAAWANSOWANYM XGBOOST ORAZ KOREKTĄ KONTUZJI ---
 def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0.0):
     h_off = max(80.0, home_team.get("AVG_PTS_FOR") - home_injury_adj)
     h_def = home_team.get("AVG_PTS_AGAINST")
@@ -468,7 +467,6 @@ def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0
     expected_diff = expected_home_pts - expected_away_pts
     base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     
-    # --- XGBOOST BOOST ---
     try:
         bets = load_bets()
         settled_moneyline = [
@@ -909,4 +907,3 @@ with tab4:
         df_weights = pd.DataFrame(weights_list)
         df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
         st.dataframe(df_weights, use_container_width=True, hide_index=True)
-                manual_home = st.selectbox("Gospodarz:", all_teams, ind
