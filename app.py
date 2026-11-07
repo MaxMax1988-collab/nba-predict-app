@@ -163,7 +163,6 @@ def load_bets():
         response = supabase.table("bets").select("*").order("id", desc=False).execute()
         return response.data
     except Exception as e:
-        st.error(f"Błąd odczytu typów z Supabase: {e}")
         return []
 
 def save_bet(date, match, pick, odds):
@@ -225,7 +224,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     
     error_logs = {}
@@ -277,12 +276,11 @@ def update_model_weights_from_bets():
 
     save_model_weights(error_logs)
 
-# --- BEZPIECZNE ROZLICZANIE POPRZEZ THE ODDS API ---
 def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -426,31 +424,28 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- ZBUFOROWany MODEL XGBOOST (DZIĘKI TEMU SUPABASE NIE BLOKUJE SUWAKÓW) ---
-@st.cache_data(ttl=600)
-def get_xgb_boost_prob(base_prob_home):
+# --- SZYBKI ZBUFOROWany MODEL (ZAPOBIEGA BLOKOWANIU SUWAKÓW) ---
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_xgb_modifier():
     try:
         bets = load_bets()
         settled_moneyline = [
             b for b in bets 
-            if b.get("status") in ["Wygrany", "Przegrany"] 
+            if b.get("status"] in ["Wygrany", "Przegrany"] 
             and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
         ]
-        
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=30)
             xgb_model.fit(X_train, y_train)
             
-            dummy_input = np.array([[1.9]])
-            pred_prob = xgb_model.predict_proba(dummy_input)[0][1]
-            ml_boost = (pred_prob - 0.5) * 0.1
-            return max(0.12, min(0.88, base_prob_home + ml_boost))
+            pred_prob = xgb_model.predict_proba([[1.9]])[0][1]
+            return (pred_prob - 0.5) * 0.1
     except Exception:
         pass
-    return max(0.12, min(0.88, base_prob_home))
+    return 0.0
 
 def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0.0):
     h_off = max(80.0, home_team.get("AVG_PTS_FOR") - home_injury_adj)
@@ -487,13 +482,13 @@ def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0
     )
 
     base_total = expected_home_pts + expected_away_pts
-    league_ou_offset = 4.8
-    expected_total_pts = base_total + league_ou_offset
+    expected_total_pts = base_total + 4.8
 
     expected_diff = expected_home_pts - expected_away_pts
     base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     
-    prob_home = get_xgb_boost_prob(base_prob_home)
+    ml_boost = get_xgb_modifier()
+    prob_home = max(0.12, min(0.88, base_prob_home + ml_boost))
     prob_away = 1 - prob_home
     handicap = -round(expected_diff * 2) / 2
 
@@ -789,7 +784,7 @@ with tab3:
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
@@ -847,7 +842,7 @@ with tab3:
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
                 unit_stake = 10.0
-                if b.get("status") == "Wygrany":
+                if b.get("status"] == "Wygrany":
                     current_capital += (odds_val - 1.0) * unit_stake
                 else:
                     current_capital -= unit_stake
