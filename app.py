@@ -210,16 +210,22 @@ def load_model_weights():
         return {}
 
 def save_model_weights(weights_dict):
+    if not weights_dict:
+        return
     try:
-        for team_name, vals in weights_dict.items():
-            supabase.table("model_weights").upsert({
+        payload = [
+            {
                 "team_name": team_name,
                 "off_corr": round(vals.get("off_corr", 0.0), 2),
                 "def_corr": round(vals.get("def_corr", 0.0), 2)
-            }).execute()
+            }
+            for team_name, vals in weights_dict.items()
+        ]
+        supabase.table("model_weights").upsert(payload, on_conflict="team_name").execute()
     except Exception as e:
-        st.error(f"Błąd zapisu wag do Supabase: {e}")
+        pass
 
+@st.cache_data(ttl=43200, show_spinner=False)
 def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
@@ -280,7 +286,7 @@ def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -435,7 +441,7 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- SZYBKI ZBUFOROWany MODEL (ZAPOBIEGA BLOKOWANIU SUWAKÓW) ---
+# --- SZYBKI ZBUFOROWANY MODEL (ZAPOBIEGA BLOKOWANIU SUWAKÓW) ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_xgb_modifier():
     try:
@@ -447,7 +453,7 @@ def get_xgb_modifier():
         ]
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=30)
             xgb_model.fit(X_train, y_train)
@@ -795,7 +801,7 @@ with tab3:
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
@@ -853,7 +859,7 @@ with tab3:
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
                 unit_stake = 10.0
-                if b.get("status") == "Wygrany":
+                if b.get("status"] == "Wygrany":
                     current_capital += (odds_val - 1.0) * unit_stake
                 else:
                     current_capital -= unit_stake
