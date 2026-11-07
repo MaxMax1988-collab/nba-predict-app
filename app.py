@@ -276,7 +276,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
     ]
     
     error_logs = {}
@@ -331,7 +331,7 @@ def update_model_weights_from_bets():
 # --- BEZPIECZNA AUTOMATYZACJA ROZLICZANIA ---
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -609,7 +609,7 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
@@ -656,8 +656,8 @@ bankroll = st.sidebar.number_input(
 
 st.sidebar.success("🟢 System (XGBoost + Cache + Supabase) Aktywny")
 
-# Panel boczny: Opcja manualnego rozliczenia, żeby użytkownik miał kontrolę
-if st.sidebar.button("🔄 Rozlicz wczorajsze/zaległe zakłady"):
+# Panel boczny: Opcja manualnego rozliczenia, żebyś mógł jednym kliknięciem popchnąć zaległe zakłady
+if st.sidebar.button("🔄 Rozlicz zaległe zakłady"):
     with st.spinner("Rozliczanie zakładów..."):
         auto_settle_bets()
         update_model_weights_from_bets()
@@ -820,7 +820,6 @@ with tab1:
             if bookie_h_odds > 0:
                 ev_h = (res.get("prob_home") * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
-                # FILTR SZUMU: EV min. +3.0%
                 if ev_h > 0.03:
                     st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                     if st.button("➕ Zapisz typ gospodarza"):
@@ -919,7 +918,7 @@ with tab3:
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status"] == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
