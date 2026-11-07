@@ -76,7 +76,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_API_KEY = "99664b27d26274c81d967d9d5962dfc2"
+DEFAULT_API_KEY = "62e230538ba5e8f6ff0aa80fcdbb481c"
 
 # --- INICJALIZACJA CHMURY SUPABASE ---
 @st.cache_resource
@@ -158,7 +158,7 @@ TEAM_NAME_MAPPING = {
     "Washington Wizards": "Washington Wizards",
 }
 
-# --- POBIERANIE RAPORTU O KONTUZJACH (Z CACHE, SZYBKIE) ---
+# --- POBIERANIE RAPORTU O KONTUZJACH (Z CACHE, SZYBKIE I STABILNE) ---
 @st.cache_data(ttl=1800)
 def fetch_live_injury_reports():
     injuries_by_team = {}
@@ -276,7 +276,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     
     error_logs = {}
@@ -331,7 +331,7 @@ def update_model_weights_from_bets():
 # --- BEZPIECZNA AUTOMATYZACJA ROZLICZANIA ---
 def auto_settle_bets():
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -475,7 +475,6 @@ def fetch_nba_standings():
         st.error(f"Błąd pobierania tabeli NBA z ESPN: {e}")
         return {}, season_year
 
-# --- KLUCZOWA NAPRAWA: DODANO CACHING DLA ODDS API (OSZCZĘDNOŚĆ ZAPYTAN) ---
 @st.cache_data(ttl=900)
 def fetch_live_odds(api_key):
     if not api_key:
@@ -506,7 +505,7 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
-# --- PREDYKCJA Z XGBOOST ORAZ BEZPIECZNYM FILTREM KONTUZJI I VALUE ---
+# --- PREDYKCJA Z XGBOOST ORAZ INTELIGENTNYM SYSTEMEM KONTUZJI ---
 def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, home_b2b=False, away_b2b=False):
     home_team = teams_dict.get(home_team_name, {})
     away_team = teams_dict.get(away_team_name, {})
@@ -519,12 +518,43 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     home_injuries = injury_reports.get(home_team_name, [])
     away_injuries = injury_reports.get(away_team_name, [])
 
-    # BEZPIECZNY SYSTEM KONTUZJI: Twardy sufit max 3 pkt, eliminacja szumu rezerwowych
-    home_out_count = sum(1 for inj in home_injuries if inj.get("status", "").lower() in ["out", "doubtful"])
-    away_out_count = sum(1 for inj in away_injuries if inj.get("status", "").lower() in ["out", "doubtful"])
+    home_injury_penalty = 0.0
+    away_injury_penalty = 0.0
 
-    home_injury_penalty = min(3.0, home_out_count * 1.0)
-    away_injury_penalty = min(3.0, away_out_count * 1.0)
+    # Inteligentna waga kontuzji (uwzględnia rotację i odrzuca długie L4)
+    for idx, inj in enumerate(home_injuries):
+        status_lower = inj.get("status", "").lower()
+        details = inj.get("details", "").lower()
+        
+        if "indefinite" in details or "out for season" in details or "acl" in details or "surgery" in details:
+            continue
+
+        if "out" in status_lower or "doubtful" in status_lower:
+            if idx == 0:
+                home_injury_penalty += 2.0  # Lider / główny starter
+            elif idx == 1:
+                home_injury_penalty += 1.2  # Ważny gracz rotacji
+            else:
+                home_injury_penalty += 0.4  # Głęboki rezerwowy
+
+    for idx, inj in enumerate(away_injuries):
+        status_lower = inj.get("status", "").lower()
+        details = inj.get("details", "").lower()
+        
+        if "indefinite" in details or "out for season" in details or "acl" in details or "surgery" in details:
+            continue
+
+        if "out" in status_lower or "doubtful" in status_lower:
+            if idx == 0:
+                away_injury_penalty += 2.0
+            elif idx == 1:
+                away_injury_penalty += 1.2
+            else:
+                away_injury_penalty += 0.4
+
+    # Twardy sufit bezpieczeństwa (maksymalnie 3.5 pkt kary)
+    home_injury_penalty = min(3.5, home_injury_penalty)
+    away_injury_penalty = min(3.5, away_injury_penalty)
 
     h_off = max(85.0, h_off - home_injury_penalty)
     a_off = max(85.0, a_off - away_injury_penalty)
@@ -579,7 +609,7 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
         
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
             xgb_model.fit(X_train, y_train)
@@ -624,21 +654,20 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 System (XGBoost + Safe Caching + Supabase) Aktywny")
+st.sidebar.success("🟢 System (XGBoost + Cache + Supabase) Aktywny")
+
+# Panel boczny: Opcja manualnego rozliczenia, żeby użytkownik miał kontrolę
+if st.sidebar.button("🔄 Rozlicz wczorajsze/zaległe zakłady"):
+    with st.spinner("Rozliczanie zakładów..."):
+        auto_settle_bets()
+        update_model_weights_from_bets()
+    st.sidebar.success("Zakończono rozliczanie!")
+    st.rerun()
 
 # Ładowanie danych głównych
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
 injury_reports = fetch_live_injury_reports()
-
-# --- ZABEZPIECZENIE SESJI: AUTOMATYZACJA ROZLICZANIA TYLKO RAZ NA WEJŚCIE ---
-if "settled_done" not in st.session_state:
-    try:
-        auto_settle_bets()
-        update_model_weights_from_bets()
-    except Exception:
-        pass
-    st.session_state["settled_done"] = True
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
@@ -651,7 +680,7 @@ with tab1:
     st.subheader("Nadchodzące mecze (Smart Injury Weights + Moneyline + Kelly)")
 
     if not live_odds_data:
-        st.info("Brak meczów z Odds API lub przekroczono limit zapytań. Wybierz drużyny ręcznie z bazy ESPN:")
+        st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
         all_teams = sorted(list(teams_dict.keys()))
         if all_teams:
             c1, c2 = st.columns(2)
@@ -791,7 +820,7 @@ with tab1:
             if bookie_h_odds > 0:
                 ev_h = (res.get("prob_home") * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
-                # FILTR MATEMATYCZNEGO SZUMU: EV musi wynosić min. +3.0% i stawkować sensownie
+                # FILTR SZUMU: EV min. +3.0%
                 if ev_h > 0.03:
                     st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                     if st.button("➕ Zapisz typ gospodarza"):
@@ -890,7 +919,7 @@ with tab3:
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
