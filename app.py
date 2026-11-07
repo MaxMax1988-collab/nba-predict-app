@@ -158,8 +158,8 @@ TEAM_NAME_MAPPING = {
     "Washington Wizards": "Washington Wizards",
 }
 
-# --- POBIERANIE RAPORTU O KONTUZJACH (SZYBKIE, Z CACHE) ---
-@st.cache_data(ttl=900)
+# --- POBIERANIE RAPORTU O KONTUZJACH (Z CACHE, SZYBKIE) ---
+@st.cache_data(ttl=1800)
 def fetch_live_injury_reports():
     injuries_by_team = {}
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
@@ -475,7 +475,8 @@ def fetch_nba_standings():
         st.error(f"Błąd pobierania tabeli NBA z ESPN: {e}")
         return {}, season_year
 
-@st.cache_data(ttl=300)
+# --- KLUCZOWA NAPRAWA: DODANO CACHING DLA ODDS API (OSZCZĘDNOŚĆ ZAPYTAN) ---
+@st.cache_data(ttl=900)
 def fetch_live_odds(api_key):
     if not api_key:
         return []
@@ -505,7 +506,7 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
-# --- PREDYKCJA Z XGBOOST ---
+# --- PREDYKCJA Z XGBOOST ORAZ BEZPIECZNYM FILTREM KONTUZJI I VALUE ---
 def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, home_b2b=False, away_b2b=False):
     home_team = teams_dict.get(home_team_name, {})
     away_team = teams_dict.get(away_team_name, {})
@@ -518,26 +519,12 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     home_injuries = injury_reports.get(home_team_name, [])
     away_injuries = injury_reports.get(away_team_name, [])
 
-    home_injury_penalty = 0.0
-    away_injury_penalty = 0.0
+    # BEZPIECZNY SYSTEM KONTUZJI: Twardy sufit max 3 pkt, eliminacja szumu rezerwowych
+    home_out_count = sum(1 for inj in home_injuries if inj.get("status", "").lower() in ["out", "doubtful"])
+    away_out_count = sum(1 for inj in away_injuries if inj.get("status", "").lower() in ["out", "doubtful"])
 
-    for idx, inj in enumerate(home_injuries):
-        if inj.get("status", "").lower() in ["out", "doubtful"]:
-            if idx == 0:
-                home_injury_penalty += 5.0
-            elif idx == 1:
-                home_injury_penalty += 3.5
-            else:
-                home_injury_penalty += 1.5
-
-    for idx, inj in enumerate(away_injuries):
-        if inj.get("status", "").lower() in ["out", "doubtful"]:
-            if idx == 0:
-                away_injury_penalty += 5.0
-            elif idx == 1:
-                away_injury_penalty += 3.5
-            else:
-                away_injury_penalty += 1.5
+    home_injury_penalty = min(3.0, home_out_count * 1.0)
+    away_injury_penalty = min(3.0, away_out_count * 1.0)
 
     h_off = max(85.0, h_off - home_injury_penalty)
     a_off = max(85.0, a_off - away_injury_penalty)
@@ -637,14 +624,14 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 System (XGBoost + Smart Injury Weighting + Supabase) Aktywny")
+st.sidebar.success("🟢 System (XGBoost + Safe Caching + Supabase) Aktywny")
 
 # Ładowanie danych głównych
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
 injury_reports = fetch_live_injury_reports()
 
-# --- ZABEZPIECZENIE SESJI: AUTOMATYZACJA WYKONUJE SIĘ TYLKO RAZ NA WEJŚCIE ---
+# --- ZABEZPIECZENIE SESJI: AUTOMATYZACJA ROZLICZANIA TYLKO RAZ NA WEJŚCIE ---
 if "settled_done" not in st.session_state:
     try:
         auto_settle_bets()
@@ -664,7 +651,7 @@ with tab1:
     st.subheader("Nadchodzące mecze (Smart Injury Weights + Moneyline + Kelly)")
 
     if not live_odds_data:
-        st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
+        st.info("Brak meczów z Odds API lub przekroczono limit zapytań. Wybierz drużyny ręcznie z bazy ESPN:")
         all_teams = sorted(list(teams_dict.keys()))
         if all_teams:
             c1, c2 = st.columns(2)
@@ -804,15 +791,15 @@ with tab1:
             if bookie_h_odds > 0:
                 ev_h = (res.get("prob_home") * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
-                if ev_h > 0:
+                # FILTR MATEMATYCZNEGO SZUMU: EV musi wynosić min. +3.0% i stawkować sensownie
+                if ev_h > 0.03:
                     st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
+                    if st.button("➕ Zapisz typ gospodarza"):
+                        save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_home, bookie_h_odds)
+                        st.success("Zapisano automatycznie w chmurze Supabase!")
+                        st.rerun()
                 else:
-                    st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
-
-                if st.button("➕ Zapisz typ gospodarza"):
-                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_home, bookie_h_odds)
-                    st.success("Zapisano automatycznie w chmurze Supabase!")
-                    st.rerun()
+                    st.error(f"❌ Brak realnego Value (Szum statystyczny). EV: {ev_h*100:.1f}%")
 
         with col_b2:
             st.write(f"**{matched_away} (Gość)**")
@@ -821,15 +808,14 @@ with tab1:
             if bookie_a_odds > 0:
                 ev_a = (res.get("prob_away") * bookie_a_odds) - 1
                 kelly_stake_a = calculate_kelly_stake(bankroll, res.get("prob_away"), bookie_a_odds)
-                if ev_a > 0:
+                if ev_a > 0.03:
                     st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
+                    if st.button("➕ Zapisz typ gościa"):
+                        save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_away, bookie_a_odds)
+                        st.success("Zapisano automatycznie w chmurze Supabase!")
+                        st.rerun()
                 else:
-                    st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
-
-                if st.button("➕ Zapisz typ gościa"):
-                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_away, bookie_a_odds)
-                    st.success("Zapisano automatycznie w chmurze Supabase!")
-                    st.rerun()
+                    st.error(f"❌ Brak realnego Value (Szum statystyczny). EV: {ev_a*100:.1f}%")
 
         st.markdown("---")
         st.subheader("📊 Analiza Rynku Over / Under (Suma Punktów)")
