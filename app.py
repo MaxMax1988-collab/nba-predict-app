@@ -76,7 +76,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_API_KEY = "99664b27d26274c81d967d9d5962dfc2"
+DEFAULT_API_KEY = "62e230538ba5e8f6ff0aa80fcdbb481c"
 
 # --- INICJALIZACJA CHMURY SUPABASE ---
 @st.cache_resource
@@ -157,61 +157,6 @@ TEAM_NAME_MAPPING = {
     "Detroit Pistons": "Detroit Pistons",
     "Washington Wizards": "Washington Wizards",
 }
-
-# --- POBIERANIE RAPORTU O KONTUZJACH (Z CACHE, SZYBKIE I STABILNE) ---
-@st.cache_data(ttl=1800)
-def fetch_live_injury_reports():
-    injuries_by_team = {}
-    url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers, timeout=3)
-        if res.status_code == 200:
-            data = res.json()
-            for event in data.get("events", []):
-                event_id = event.get("id")
-                summary_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={event_id}"
-                sum_res = requests.get(summary_url, headers=headers, timeout=2)
-                if sum_res.status_code == 200:
-                    sum_data = sum_res.json()
-                    for team_inj in sum_data.get("injuries", []):
-                        t_data = team_inj.get("team", {})
-                        t_name = t_data.get("displayName", "")
-                        for p in team_inj.get("injuries", []):
-                            athlete = p.get("athlete", {})
-                            p_name = athlete.get("displayName", "Unknown")
-                            
-                            raw_status = p.get("status", "Out")
-                            if isinstance(raw_status, dict):
-                                status_desc = raw_status.get("description", "OUT")
-                            else:
-                                status_desc = str(raw_status)
-
-                            raw_type = p.get("type", "Uraz")
-                            if isinstance(raw_type, dict):
-                                injury_type = raw_type.get("name") or raw_type.get("description", "Uraz")
-                            else:
-                                injury_type = str(raw_type)
-
-                            if injury_type.lower() in ["out", "injury_status_out"]:
-                                injury_type = "Brak szczegółów urazu"
-
-                            return_date = p.get("returnDate", "Brak terminu")
-                            details = f"Szczegóły: {injury_type} | Powrót ok.: {return_date}"
-
-                            if t_name not in injuries_by_team:
-                                injuries_by_team[t_name] = []
-                            
-                            existing_players = [item['player'] for item in injuries_by_team[t_name]]
-                            if p_name not in existing_players:
-                                injuries_by_team[t_name].append({
-                                    "player": p_name,
-                                    "status": status_desc,
-                                    "details": details
-                                })
-    except Exception:
-        pass
-    return injuries_by_team
 
 # --- OPERACJE NA BAZIE SUPABASE ---
 def load_bets():
@@ -505,8 +450,52 @@ def check_if_team_played_yesterday(team_name):
         pass
     return False
 
+# --- NOWOŚĆ: POBIERANIE KONTUZJI TYLKO DLA KONKRETNEJ DRUŻYNY NA ŻĄDANIE (LAZY LOADING) ---
+@st.cache_data(ttl=1800)
+def fetch_team_injuries(team_name):
+    team_injuries = []
+    url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        res = requests.get(url, headers=headers, timeout=3)
+        if res.status_code == 200:
+            data = res.json()
+            for event in data.get("events", []):
+                event_id = event.get("id")
+                summary_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={event_id}"
+                sum_res = requests.get(summary_url, headers=headers, timeout=2)
+                if sum_res.status_code == 200:
+                    sum_data = sum_res.json()
+                    for team_inj in sum_data.get("injuries", []):
+                        t_data = team_inj.get("team", {})
+                        t_name = t_data.get("displayName", "")
+                        # Sprawdzamy dopasowanie nazwy drużyny
+                        if team_name.lower() in t_name.lower() or t_name.lower() in team_name.lower():
+                            for p in team_inj.get("injuries", []):
+                                athlete = p.get("athlete", {})
+                                p_name = athlete.get("displayName", "Unknown")
+                                
+                                raw_status = p.get("status", "Out")
+                                status_desc = raw_status.get("description", "OUT") if isinstance(raw_status, dict) else str(raw_status)
+
+                                raw_type = p.get("type", "Uraz")
+                                injury_type = raw_type.get("name") or raw_type.get("description", "Uraz") if isinstance(raw_type, dict) else str(raw_type)
+
+                                return_date = p.get("returnDate", "Brak terminu")
+                                details = f"Szczegóły: {injury_type} | Powrót ok.: {return_date}"
+
+                                team_injuries.append({
+                                    "player": p_name,
+                                    "status": status_desc,
+                                    "details": details
+                                })
+                            return team_injuries
+    except Exception:
+        pass
+    return team_injuries
+
 # --- PREDYKCJA Z XGBOOST ORAZ INTELIGENTNYM SYSTEMEM KONTUZJI ---
-def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, home_b2b=False, away_b2b=False):
+def predict_matchup(home_team_name, away_team_name, teams_dict, home_b2b=False, away_b2b=False):
     home_team = teams_dict.get(home_team_name, {})
     away_team = teams_dict.get(away_team_name, {})
 
@@ -515,13 +504,14 @@ def predict_matchup(home_team_name, away_team_name, teams_dict, injury_reports, 
     a_off = away_team.get("AVG_PTS_FOR", 112.0)
     a_def = away_team.get("AVG_PTS_AGAINST", 112.0)
 
-    home_injuries = injury_reports.get(home_team_name, [])
-    away_injuries = injury_reports.get(away_team_name, [])
+    # Pobieramy kontuzje wybiórczo tylko dla tych dwóch drużyn (zero obciążenia serwera)
+    home_injuries = fetch_team_injuries(home_team_name)
+    away_injuries = fetch_team_injuries(away_team_name)
 
     home_injury_penalty = 0.0
     away_injury_penalty = 0.0
 
-    # Inteligentna waga kontuzji (uwzględnia rotację i odrzuca długie L4)
+    # Inteligentna waga kontuzji z odrzuceniem długich L4
     for idx, inj in enumerate(home_injuries):
         status_lower = inj.get("status", "").lower()
         details = inj.get("details", "").lower()
@@ -654,9 +644,9 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
-st.sidebar.success("🟢 System (XGBoost + Cache + Supabase) Aktywny")
+st.sidebar.success("🟢 System (XGBoost + Lazy Injuries + Supabase) Aktywny")
 
-# Panel boczny: Opcja manualnego rozliczenia, żebyś mógł jednym kliknięciem popchnąć zaległe zakłady
+# Panel boczny: Opcja ręcznego rozliczenia zaległych zakładów
 if st.sidebar.button("🔄 Rozlicz zaległe zakłady"):
     with st.spinner("Rozliczanie zakładów..."):
         auto_settle_bets()
@@ -664,10 +654,9 @@ if st.sidebar.button("🔄 Rozlicz zaległe zakłady"):
     st.sidebar.success("Zakończono rozliczanie!")
     st.rerun()
 
-# Ładowanie danych głównych
+# Ładowanie danych głównych (błyskawiczne)
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
-injury_reports = fetch_live_injury_reports()
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
@@ -690,7 +679,7 @@ with tab1:
                 manual_away = st.selectbox("Gość:", all_teams, index=1 if len(all_teams) > 1 else 0)
 
             if manual_home in teams_dict and manual_away in teams_dict:
-                res = predict_matchup(manual_home, manual_away, teams_dict, injury_reports)
+                res = predict_matchup(manual_home, manual_away, teams_dict)
                 st.markdown("---")
                 st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
     else:
@@ -743,9 +732,9 @@ with tab1:
         home_b2b = check_if_team_played_yesterday(matched_home)
         away_b2b = check_if_team_played_yesterday(matched_away)
 
-        res = predict_matchup(matched_home, matched_away, teams_dict, injury_reports, home_b2b, away_b2b)
+        res = predict_matchup(matched_home, matched_away, teams_dict, home_b2b, away_b2b)
 
-        # --- RAPORT O KONTUZJACH ---
+        # --- RAPORT O KONTUZJACH (DLA WYBRANEGO MECZU) ---
         st.markdown("### 🏥 Automatyczny Raport o Kontuzjach (Injury Report)")
         col_i1, col_i2 = st.columns(2)
         with col_i1:
