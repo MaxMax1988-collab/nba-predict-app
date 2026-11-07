@@ -339,76 +339,87 @@ def fetch_nba_standings():
     now = datetime.now()
     season_year = now.year + 1 if now.month >= 10 else now.year
     url = f"https://site.api.espn.com/apis/v2/sports/basketball/nba/standings?season={season_year}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.espn.com/"
+    }
 
     teams_dict = {}
-    try:
-        res = requests.get(url, headers=headers, timeout=5)
-        res.raise_for_status()
-        data = res.json()
+    
+    for attempt in range(3):
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                error_logs = load_model_weights()
 
-        error_logs = load_model_weights()
+                for children in data.get("children", []):
+                    for entry in children.get("standings", {}).get("entries", []):
+                        team_info = entry.get("team", {})
+                        team_name = team_info.get("displayName", "Unknown")
+                        stats_list = entry.get("stats", [])
 
-        for children in data.get("children", []):
-            for entry in children.get("standings", {}).get("entries", []):
-                team_info = entry.get("team", {})
-                team_name = team_info.get("displayName", "Unknown")
-                stats_list = entry.get("stats", [])
+                        def get_stat(name, default=0.0):
+                            for s in stats_list:
+                                if s.get("name") == name:
+                                    return float(s.get("value", default))
+                            return float(default)
 
-                def get_stat(name, default=0.0):
-                    for s in stats_list:
-                        if s.get("name") == name:
-                            return float(s.get("value", default))
-                    return float(default)
+                        gp = int(get_stat("gamesPlayed", 0))
+                        wins = int(get_stat("wins", 0))
+                        losses = int(get_stat("losses", 0))
 
-                gp = int(get_stat("gamesPlayed", 0))
-                wins = int(get_stat("wins", 0))
-                losses = int(get_stat("losses", 0))
+                        if gp == 0 and (wins + losses) > 0:
+                            gp = wins + losses
 
-                if gp == 0 and (wins + losses) > 0:
-                    gp = wins + losses
+                        avg_pts_for = get_stat("avgPointsFor", 112.0)
+                        if avg_pts_for == 0.0:
+                            avg_pts_for = 112.0
+                        avg_pts_against = get_stat("avgPointsAgainst", 112.0)
+                        if avg_pts_against == 0.0:
+                            avg_pts_against = 112.0
 
-                avg_pts_for = get_stat("avgPointsFor", 112.0)
-                if avg_pts_for == 0.0:
-                    avg_pts_for = 112.0
-                avg_pts_against = get_stat("avgPointsAgainst", 112.0)
-                if avg_pts_against == 0.0:
-                    avg_pts_against = 112.0
+                        if gp < 5:
+                            weight = gp / 5.0
+                            avg_pts_for = (weight * avg_pts_for) + ((1 - weight) * 112.0)
+                            avg_pts_against = (weight * avg_pts_against) + ((1 - weight) * 112.0)
 
-                if gp < 5:
-                    weight = gp / 5.0
-                    avg_pts_for = (weight * avg_pts_for) + ((1 - weight) * 112.0)
-                    avg_pts_against = (weight * avg_pts_against) + ((1 - weight) * 112.0)
+                        base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
 
-                base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
+                        team_errs = error_logs.get(team_name, {"off_corr": 0.0, "def_corr": 0.0})
+                        off_corr = team_errs.get("off_corr", 0.0)
+                        def_corr = team_errs.get("def_corr", 0.0)
 
-                team_errs = error_logs.get(team_name, {"off_corr": 0.0, "def_corr": 0.0})
-                off_corr = team_errs.get("off_corr", 0.0)
-                def_corr = team_errs.get("def_corr", 0.0)
+                        adjusted_pts_for = round(avg_pts_for + off_corr, 1)
+                        adjusted_pts_against = round(avg_pts_against + def_corr, 1)
+                        net_rating = round(adjusted_pts_for - adjusted_pts_against, 2)
 
-                adjusted_pts_for = round(avg_pts_for + off_corr, 1)
-                adjusted_pts_against = round(avg_pts_against + def_corr, 1)
-                net_rating = round(adjusted_pts_for - adjusted_pts_against, 2)
+                        history_weight = round(max(0.1, 1.0 - (gp * 0.05)), 2)
 
-                history_weight = round(max(0.1, 1.0 - (gp * 0.05)), 2)
+                        teams_dict[team_name] = {
+                            "TEAM_NAME": team_name,
+                            "GP": gp,
+                            "W": wins,
+                            "L": losses,
+                            "AVG_PTS_FOR": adjusted_pts_for,
+                            "AVG_PTS_AGAINST": adjusted_pts_against,
+                            "NET_RATING": net_rating,
+                            "OFF_CORR": round(off_corr, 2),
+                            "DEF_CORR": round(def_corr, 2),
+                            "TOTAL_POWER": round(base_power * history_weight, 2),
+                        }
+                break
+        except Exception:
+            pass
 
-                teams_dict[team_name] = {
-                    "TEAM_NAME": team_name,
-                    "GP": gp,
-                    "W": wins,
-                    "L": losses,
-                    "AVG_PTS_FOR": adjusted_pts_for,
-                    "AVG_PTS_AGAINST": adjusted_pts_against,
-                    "NET_RATING": net_rating,
-                    "OFF_CORR": round(off_corr, 2),
-                    "DEF_CORR": round(def_corr, 2),
-                    "TOTAL_POWER": round(base_power * history_weight, 2),
-                }
+    if not teams_dict:
+        st.error("⚠️ Nie udało się pobrać aktualnej tabeli z API ESPN (błąd dostępu). Odśwież stronę za chwilę lub sprawdź połączenie z siecią.")
+        st.stop()
 
-        return teams_dict, season_year
-    except Exception as e:
-        st.error(f"Błąd pobierania tabeli NBA z ESPN: {e}")
-        return {}, season_year
+    return teams_dict, season_year
 
 @st.cache_data(ttl=300)
 def fetch_live_odds(api_key):
@@ -424,7 +435,7 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- SZYBKI ZBUFOROWANY MODEL (ZAPOBIEGA BLOKOWANIU SUWAKÓW) ---
+# --- SZYBKI ZBUFOROWany MODEL (ZAPOBIEGA BLOKOWANIU SUWAKÓW) ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_xgb_modifier():
     try:
