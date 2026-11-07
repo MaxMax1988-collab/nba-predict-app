@@ -14,7 +14,7 @@ st.set_page_config(
     page_title="Advanced Multi-Factor NBA Predictor", page_icon="🏀", layout="wide"
 )
 
-# --- NOWOCZESNY DESIGN CSS (KARTY DIAGNOSTYCZNE I WYGLĄD) ---
+# --- NOWOCZESNY DESIGN CSS ---
 st.markdown("""
 <style>
     .stApp {
@@ -426,6 +426,32 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
+# --- ZBUFOROWany MODEL XGBOOST (DZIĘKI TEMU SUPABASE NIE BLOKUJE SUWAKÓW) ---
+@st.cache_data(ttl=600)
+def get_xgb_boost_prob(base_prob_home):
+    try:
+        bets = load_bets()
+        settled_moneyline = [
+            b for b in bets 
+            if b.get("status") in ["Wygrany", "Przegrany"] 
+            and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
+        ]
+        
+        if len(settled_moneyline) >= 10:
+            X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            
+            xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=30)
+            xgb_model.fit(X_train, y_train)
+            
+            dummy_input = np.array([[1.9]])
+            pred_prob = xgb_model.predict_proba(dummy_input)[0][1]
+            ml_boost = (pred_prob - 0.5) * 0.1
+            return max(0.12, min(0.88, base_prob_home + ml_boost))
+    except Exception:
+        pass
+    return max(0.12, min(0.88, base_prob_home))
+
 def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0.0):
     h_off = max(80.0, home_team.get("AVG_PTS_FOR") - home_injury_adj)
     h_def = home_team.get("AVG_PTS_AGAINST")
@@ -467,30 +493,7 @@ def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0
     expected_diff = expected_home_pts - expected_away_pts
     base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
     
-    try:
-        bets = load_bets()
-        settled_moneyline = [
-            b for b in bets 
-            if b.get("status") in ["Wygrany", "Przegrany"] 
-            and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
-        ]
-        
-        if len(settled_moneyline) >= 10:
-            X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
-            
-            xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
-            xgb_model.fit(X_train, y_train)
-            
-            dummy_input = np.array([[1.9]])
-            pred_prob = xgb_model.predict_proba(dummy_input)[0][1]
-            ml_boost = (pred_prob - 0.5) * 0.1
-            prob_home = max(0.12, min(0.88, base_prob_home + ml_boost))
-        else:
-            prob_home = max(0.12, min(0.88, base_prob_home))
-    except Exception:
-        prob_home = max(0.12, min(0.88, base_prob_home))
-
+    prob_home = get_xgb_boost_prob(base_prob_home)
     prob_away = 1 - prob_home
     handicap = -round(expected_diff * 2) / 2
 
@@ -617,12 +620,14 @@ with tab1:
             home_inj_adj = st.slider(
                 f"Kara punktowa dla {matched_home} (Gospodarz):",
                 min_value=0.0, max_value=8.0, value=0.0, step=0.5,
+                key="home_injury_slider",
                 help="Supergwiazda/Lider: 3.5 - 4.5 pkt | Kluczowy starter: 2.0 - 2.5 pkt | Szósty gracz: 1.0 - 1.5 pkt"
             )
         with col_inj2:
             away_inj_adj = st.slider(
                 f"Kara punktowa dla {matched_away} (Gość):",
                 min_value=0.0, max_value=8.0, value=0.0, step=0.5,
+                key="away_injury_slider",
                 help="Supergwiazda/Lider: 3.5 - 4.5 pkt | Kluczowy starter: 2.0 - 2.5 pkt | Szósty gracz: 1.0 - 1.5 pkt"
             )
         st.markdown("</div>", unsafe_allow_html=True)
@@ -689,7 +694,7 @@ with tab1:
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
-                if st.button("➕ Zapisz typ gospodarza"):
+                if st.button("➕ Zapisz typ gospodarza", key="save_home_btn"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_home, bookie_h_odds)
                     st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
@@ -706,7 +711,7 @@ with tab1:
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
-                if st.button("➕ Zapisz typ gościa"):
+                if st.button("➕ Zapisz typ gościa", key="save_away_btn"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_away, bookie_a_odds)
                     st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
@@ -719,13 +724,13 @@ with tab1:
             diff_total = res.get("total_pts") - total_bookie_line
             if diff_total > 2.5:
                 st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
-                if st.button("➕ Zapisz typ OVER"):
+                if st.button("➕ Zapisz typ OVER", key="save_over_btn"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Over {total_bookie_line}", total_over_odds)
                     st.success("Zapisano Over do bazy!")
                     st.rerun()
             elif diff_total < -2.5:
                 st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}** (Model przewiduje o {abs(diff_total):.1f} pkt mniej!)")
-                if st.button("➕ Zapisz typ UNDER"):
+                if st.button("➕ Zapisz typ UNDER", key="save_under_btn"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Under {total_bookie_line}", total_under_odds)
                     st.success("Zapisano Under do bazy!")
                     st.rerun()
@@ -885,7 +890,7 @@ with tab3:
         st.subheader("📋 Historia Zapisanych Typów")
         st.dataframe(df_bets, use_container_width=True, hide_index=True)
 
-        if st.button("Wyczyść całą bazę typów w chmurze"):
+        if st.button("Wyczyść całą bazę typów w chmurze", key="clear_db_btn"):
             clear_bets()
             st.rerun()
 
