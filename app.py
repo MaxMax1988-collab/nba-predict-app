@@ -25,7 +25,6 @@ st.markdown("""
         font-weight: 600;
         width: 100%;
     }
-    /* Styl kart diagnostycznych w stylu nowoczesnych dashboardów */
     .metric-card {
         background-color: #161b22;
         border: 1px solid #30363d;
@@ -65,10 +64,18 @@ st.markdown("""
         font-weight: 600;
         margin-top: 8px;
     }
+    .injury-box {
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 15px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_API_KEY = "99664b27d26274c81d967d9d5962dfc2"
+DEFAULT_API_KEY = "62e230538ba5e8f6ff0aa80fcdbb481c"
+ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba"
 
 # --- INICJALIZACJA CHMURY SUPABASE ---
 @st.cache_resource
@@ -270,79 +277,64 @@ def update_model_weights_from_bets():
 
     save_model_weights(error_logs)
 
-def auto_settle_bets():
+# --- BEZPIECZNE ROZLICZANIE POPRZEZ THE ODDS API (BEZ BŁĘDÓW ESPN) ---
+def auto_settle_from_odds_api(api_key):
+    if not api_key:
+        return
     bets = load_bets()
     pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
-    today = datetime.now()
-    dates_to_check = [
-        (today - timedelta(days=i)).strftime("%Y%m%d") for i in range(5)
-    ]
+    url = f"{ODDS_BASE_URL}/scores"
+    params = {"apiKey": api_key, "daysFrom": 3}
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code == 200:
+            scores_data = res.json()
+            for match in scores_data:
+                if match.get("completed", False):
+                    home_team_raw = match.get("home_team", "")
+                    away_team_raw = match.get("away_team", "")
+                    h_team = TEAM_NAME_MAPPING.get(home_team_raw, home_team_raw)
+                    a_team = TEAM_NAME_MAPPING.get(away_team_raw, away_team_raw)
+                    
+                    scores = match.get("scores", [])
+                    if scores and len(scores) >= 2:
+                        h_score, a_score = 0, 0
+                        for s in scores:
+                            s_name = s.get("name")
+                            mapped_s_name = TEAM_NAME_MAPPING.get(s_name, s_name)
+                            if mapped_s_name == h_team or s_name == home_team_raw:
+                                h_score = int(s.get("score", 0))
+                            elif mapped_s_name == a_team or s_name == away_team_raw:
+                                a_score = int(s.get("score", 0))
 
-    for date_str in dates_to_check:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        try:
-            res = requests.get(url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                events = res.json().get("events", [])
-                for event in events:
-                    status_type = (
-                        event.get("status", {}).get("type", {}).get("completed", False)
-                    )
-                    if status_type:
-                        competitions = event.get("competitions", [])
-                        if competitions:
-                            comp = competitions[0]
-                            competitors = comp.get("competitors", [])
-                            h_team, a_team, h_score, a_score = None, None, 0, 0
-                            for c in competitors:
-                                t_name = c.get("team", {}).get("displayName", "")
-                                score = int(c.get("score", 0))
-                                if c.get("homeAway") == "home":
-                                    h_team = t_name
-                                    h_score = score
+                        score_str = f"{a_score}:{h_score}"
+
+                        for bet in pending_bets:
+                            match_str = bet.get("match", "")
+                            if (h_team.lower() in match_str.lower() or h_team.split()[-1].lower() in match_str.lower()) and \
+                               (a_team.lower() in match_str.lower() or a_team.split()[-1].lower() in match_str.lower()):
+                                
+                                pick = bet.get("pick", "")
+                                if "Over" in pick or "Under" in pick:
+                                    total_points = h_score + a_score
+                                    try:
+                                        parts = pick.split(" ")
+                                        line_val = float(parts[1])
+                                        is_over = parts[0] == "Over"
+                                        won = total_points > line_val if is_over else total_points < line_val
+                                        new_status = "Wygrany" if won else "Przegrany"
+                                    except:
+                                        new_status = "Oczekujący"
                                 else:
-                                    a_team = t_name
-                                    a_score = score
+                                    winner = h_team if h_score > a_score else a_team
+                                    new_status = "Wygrany" if pick.lower() in winner.lower() or winner.lower() in pick.lower() else "Przegrany"
 
-                            event_date_raw = event.get("date", "")[:10]
-
-                            if h_team and a_team:
-                                for bet in pending_bets:
-                                    match_str = bet.get("match", "")
-                                    bet_date = bet.get("date", "")
-
-                                    if a_team in match_str and h_team in match_str:
-                                        try:
-                                            b_dt = datetime.strptime(bet_date, "%Y-%m-%d")
-                                            e_dt = datetime.strptime(event_date_raw, "%Y-%m-%d")
-                                            diff_days = abs((b_dt - e_dt).days)
-                                        except:
-                                            diff_days = 0
-
-                                        if diff_days <= 1:
-                                            pick = bet.get("pick")
-                                            if "Over" in pick or "Under" in pick:
-                                                total_points = h_score + a_score
-                                                try:
-                                                    parts = pick.split(" ")
-                                                    line_val = float(parts[1])
-                                                    is_over = parts[0] == "Over"
-                                                    won_cond = total_points > line_val if is_over else total_points < line_val
-                                                    new_status = "Wygrany" if won_cond else "Przegrany"
-                                                except:
-                                                    new_status = "Oczekujący"
-                                            else:
-                                                winner = h_team if h_score > a_score else a_team
-                                                new_status = "Wygrany" if pick == winner else "Przegrany"
-
-                                            score_str = f"{a_score}:{h_score}"
-                                            update_bet_status(bet.get("id"), new_status, score_str)
-        except Exception:
-            pass
+                                update_bet_status(bet.get("id"), new_status, score_str)
+    except Exception:
+        pass
 
 @st.cache_data(ttl=1800)
 def fetch_nba_standings():
@@ -424,7 +416,7 @@ def fetch_nba_standings():
 def fetch_live_odds(api_key):
     if not api_key:
         return []
-    url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
+    url = f"{ODDS_BASE_URL}/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
     try:
         res = requests.get(url, timeout=5)
         if res.status_code == 200:
@@ -434,27 +426,11 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-def check_if_team_played_yesterday(team_name):
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={yesterday}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers, timeout=3)
-        if res.status_code == 200:
-            events = res.json().get("events", [])
-            for event in events:
-                name = event.get("name", "")
-                if team_name in name:
-                    return True
-    except Exception:
-        pass
-    return False
-
-# --- PREDYKCJA Z ZAAWANSOWANYM XGBOOST ---
-def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
-    h_off = home_team.get("AVG_PTS_FOR")
+# --- PREDYKCJA Z ZAAWANSOWANYM XGBOOST ORAZ KOREKTĄ KONTUZJI ---
+def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0.0):
+    h_off = max(80.0, home_team.get("AVG_PTS_FOR") - home_injury_adj)
     h_def = home_team.get("AVG_PTS_AGAINST")
-    a_off = away_team.get("AVG_PTS_FOR")
+    a_off = max(80.0, away_team.get("AVG_PTS_FOR") - away_injury_adj)
     a_def = away_team.get("AVG_PTS_AGAINST")
 
     league_avg_total = 224.0
@@ -463,9 +439,6 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
 
     home_mismatch_bonus = max(0.0, (h_off - a_def) * 0.3)
     away_mismatch_bonus = max(0.0, (a_off - h_def) * 0.3)
-
-    fatigue_home = -1.2 if home_b2b else 0.0
-    fatigue_away = -1.8 if away_b2b else 0.0
 
     net_diff = home_team.get("NET_RATING") - away_team.get("NET_RATING")
     power_diff = home_team.get("TOTAL_POWER") - away_team.get("TOTAL_POWER")
@@ -476,7 +449,6 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         + (net_diff / 5)
         + (power_diff / 3)
         + (home_advantage / 2)
-        + fatigue_home
         + (pace_delta / 2)
         + home_mismatch_bonus
     )
@@ -485,7 +457,6 @@ def predict_matchup(home_team, away_team, home_b2b=False, away_b2b=False):
         - (net_diff / 5)
         - (power_diff / 3)
         - (home_advantage / 2)
-        + fatigue_away
         + (pace_delta / 2)
         + away_mismatch_bonus
     )
@@ -542,7 +513,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + O/U + Handicaps)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + O/U + Handicaps + Injury Toggles)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -551,13 +522,18 @@ bankroll = st.sidebar.number_input(
     "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
 )
 
+if st.sidebar.button("🔄 Rozlicz zaległe mecze (The Odds API)"):
+    with st.spinner("Rozliczanie bezbłędnie przez The Odds API..."):
+        auto_settle_from_odds_api(api_key_input)
+    st.sidebar.success("Zakończono rozliczanie!")
+    st.rerun()
+
 st.sidebar.success("🟢 System (XGBoost + Supabase + O/U + Handicaps) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
 
 try:
-    auto_settle_bets()
     update_model_weights_from_bets()
 except Exception:
     pass
@@ -633,15 +609,32 @@ with tab1:
         if matched_away not in teams_dict:
             matched_away = list(teams_dict.keys())[1]
 
-        home_b2b = check_if_team_played_yesterday(matched_home)
-        away_b2b = check_if_team_played_yesterday(matched_away)
+        # --- MANUALNY PANEL KALIBRACJI KONTUZJI ---
+        st.markdown("<div class='injury-box'>", unsafe_allow_html=True)
+        st.subheader("🏥 Kalibracja Absencji i Kontuzji (Przed zatwierdzeniem typu)")
+        st.caption("Ustaw wagę osłabienia punktowego w zależności od absencji zawodników w rotacji:")
 
-        res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away], home_b2b, away_b2b)
+        col_inj1, col_inj2 = st.columns(2)
+        with col_inj1:
+            home_inj_adj = st.slider(
+                f"Kara punktowa dla {matched_home} (Gospodarz):",
+                min_value=0.0, max_value=8.0, value=0.0, step=0.5,
+                help="Supergwiazda/Lider: 3.5 - 4.5 pkt | Kluczowy starter: 2.0 - 2.5 pkt | Szósty gracz: 1.0 - 1.5 pkt"
+            )
+        with col_inj2:
+            away_inj_adj = st.slider(
+                f"Kara punktowa dla {matched_away} (Gość):",
+                min_value=0.0, max_value=8.0, value=0.0, step=0.5,
+                help="Supergwiazda/Lider: 3.5 - 4.5 pkt | Kluczowy starter: 2.0 - 2.5 pkt | Szósty gracz: 1.0 - 1.5 pkt"
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away], home_inj_adj, away_inj_adj)
 
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
+            st.metric("Skorygowany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
         with c2:
             st.metric("Szacowana Suma Pkt", f"{res.get('total_pts')} pkt")
         with c3:
@@ -916,3 +909,4 @@ with tab4:
         df_weights = pd.DataFrame(weights_list)
         df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
         st.dataframe(df_weights, use_container_width=True, hide_index=True)
+                manual_home = st.selectbox("Gospodarz:", all_teams, ind
