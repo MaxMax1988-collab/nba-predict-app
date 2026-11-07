@@ -1,1032 +1,447 @@
-from datetime import datetime, timedelta
-import json
-import os
-import pandas as pd
-import requests
 import streamlit as st
-from supabase import create_client, Client
+import pandas as pd
+import numpy as np
+import requests
+import os
+import psycopg2
+from datetime import datetime, timezone, timedelta
 import altair as alt
 
-import xgboost as xgb
-import numpy as np
-
+# --- KONFIGURACJA STRONY ---
 st.set_page_config(
-    page_title="Advanced Multi-Factor NBA Predictor", page_icon="🏀", layout="wide"
+    page_title="Maksbet.app - Advanced NHL Quant Engine",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- NOWOCZESNY DESIGN CSS ---
+# --- STYLE CSS ---
 st.markdown("""
-<style>
-    .stApp {
-        background-color: #0e1117;
-    }
-    .stButton>button {
-        border-radius: 8px;
-        font-weight: 600;
-        width: 100%;
-    }
-    .metric-card {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 12px;
-        padding: 18px 22px;
-        margin-bottom: 15px;
-    }
-    .metric-title {
-        color: #8b949e;
-        font-size: 14px;
-        font-weight: 500;
-        margin-bottom: 6px;
-    }
-    .metric-value {
-        color: #f0f6fc;
-        font-size: 32px;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-    }
-    .metric-badge-green {
-        display: inline-block;
-        background-color: rgba(46, 160, 67, 0.15);
-        color: #3fb950;
-        border-radius: 20px;
-        padding: 3px 10px;
-        font-size: 13px;
-        font-weight: 600;
-        margin-top: 8px;
-    }
-    .metric-badge-red {
-        display: inline-block;
-        background-color: rgba(248, 81, 73, 0.15);
-        color: #f85149;
-        border-radius: 20px;
-        padding: 3px 10px;
-        font-size: 13px;
-        font-weight: 600;
-        margin-top: 8px;
-    }
-    .injury-alert {
-        background-color: rgba(248, 81, 73, 0.1);
-        border-left: 4px solid #f85149;
-        padding: 10px 15px;
-        border-radius: 4px;
-        margin-bottom: 10px;
-        font-size: 13px;
-        color: #f0f6fc;
-    }
-</style>
+    <style>
+    .main { background-color: #0b0f19; color: #f3f4f6; }
+    [data-testid="stSidebar"] { background-color: #111827; border-right: 1px solid #1f2937; }
+    .stMetric { background: linear-gradient(135deg, #1f2937 0%, #111827 100%); padding: 15px; border-radius: 14px; border: 1px solid #374151; }
+    .value-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-left: 6px solid #10b981; padding: 20px; border-radius: 12px; margin-bottom: 15px; border: 1px solid #334155; }
+    .test-box { background: #111827; border: 1px solid #374151; padding: 15px; border-radius: 10px; margin-bottom: 10px; font-family: monospace; font-size: 13px; }
+    </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_API_KEY = "99664b27d26274c81d967d9d5962dfc2"
+# --- CONFIG API ---
+ODDS_API_KEY = "62e230538ba5e8f6ff0aa80fcdbb481c"
+ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
-# --- INICJALIZACJA CHMURY SUPABASE ---
-@st.cache_resource
-def get_supabase_client() -> Client:
-    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL"))
-    key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY"))
-    if not url or not key:
-        st.error("Brak kluczy SUPABASE_URL lub SUPABASE_KEY w Secrets Streamlit Cloud!")
-        st.stop()
-    return create_client(url, key)
-
-supabase = get_supabase_client()
-
-HISTORICAL_POWER_RATINGS = {
-    "Boston Celtics": 4.5,
-    "Oklahoma City Thunder": 4.0,
-    "Denver Nuggets": 3.5,
-    "New York Knicks": 3.0,
-    "Minnesota Timberwolves": 3.0,
-    "Dallas Mavericks": 3.0,
-    "Milwaukee Bucks": 2.5,
-    "Philadelphia 76ers": 2.5,
-    "Cleveland Cavaliers": 2.0,
-    "Indiana Pacers": 1.5,
-    "Orlando Magic": 1.5,
-    "Los Angeles Lakers": 1.5,
-    "Phoenix Suns": 1.0,
-    "Golden State Warriors": 1.0,
-    "Los Angeles Clippers": 1.0,
-    "Memphis Grizzlies": 0.5,
-    "Sacramento Kings": 0.5,
-    "Miami Heat": 0.5,
-    "New Orleans Pelicans": 0.0,
-    "San Antonio Spurs": -0.5,
-    "Chicago Bulls": -1.0,
-    "Houston Rockets": -1.0,
-    "Atlanta Hawks": -1.5,
-    "Toronto Raptors": -1.5,
-    "Utah Jazz": -2.0,
-    "Brooklyn Nets": -2.5,
-    "Charlotte Hornets": -3.0,
-    "Portland Trail Blazers": -3.0,
-    "Detroit Pistons": -3.5,
-    "Washington Wizards": -4.0,
-}
-
-TEAM_NAME_MAPPING = {
-    "Los Angeles Lakers": "Los Angeles Lakers",
-    "LA Lakers": "Los Angeles Lakers",
-    "Los Angeles Clippers": "Los Angeles Clippers",
-    "LA Clippers": "Los Angeles Clippers",
-    "Golden State Warriors": "Golden State Warriors",
-    "Boston Celtics": "Boston Celtics",
-    "Oklahoma City Thunder": "Oklahoma City Thunder",
-    "Denver Nuggets": "Denver Nuggets",
-    "New York Knicks": "New York Knicks",
-    "Minnesota Timberwolves": "Minnesota Timberwolves",
-    "Dallas Mavericks": "Dallas Mavericks",
-    "Milwaukee Bucks": "Milwaukee Bucks",
-    "Philadelphia 76ers": "Philadelphia 76ers",
-    "Cleveland Cavaliers": "Cleveland Cavaliers",
-    "Indiana Pacers": "Indiana Pacers",
-    "Orlando Magic": "Orlando Magic",
-    "Phoenix Suns": "Phoenix Suns",
-    "Memphis Grizzlies": "Memphis Grizzlies",
-    "Sacramento Kings": "Sacramento Kings",
-    "Miami Heat": "Miami Heat",
-    "New Orleans Pelicans": "New Orleans Pelicans",
-    "San Antonio Spurs": "San Antonio Spurs",
-    "Chicago Bulls": "Chicago Bulls",
-    "Houston Rockets": "Houston Rockets",
-    "Atlanta Hawks": "Atlanta Hawks",
-    "Toronto Raptors": "Toronto Raptors",
-    "Utah Jazz": "Utah Jazz",
-    "Brooklyn Nets": "Brooklyn Nets",
-    "Charlotte Hornets": "Charlotte Hornets",
-    "Portland Trail Blazers": "Portland Trail Blazers",
-    "Detroit Pistons": "Detroit Pistons",
-    "Washington Wizards": "Washington Wizards",
-}
-
-# --- OPERACJE NA BAZIE SUPABASE ---
-def load_bets():
-    try:
-        response = supabase.table("bets").select("*").order("id", desc=False).execute()
-        return response.data
-    except Exception as e:
-        st.error(f"Błąd odczytu typów z Supabase: {e}")
-        return []
-
-def save_bet(date, match, pick, odds):
-    try:
-        data = {
-            "date": date,
-            "match": match,
-            "pick": pick,
-            "odds": odds,
-            "status": "Oczekujący",
-            "score": ""
-        }
-        supabase.table("bets").insert(data).execute()
-    except Exception as e:
-        st.error(f"Błąd zapisu typu do Supabase: {e}")
-
-def update_bet_status(bet_id, status, score):
-    try:
-        supabase.table("bets").update({"status": status, "score": score}).eq("id", bet_id).execute()
-    except Exception as e:
-        st.error(f"Błąd aktualizacji statusu typu: {e}")
-
-def clear_bets():
-    try:
-        supabase.table("bets").delete().neq("id", 0).execute()
-    except Exception as e:
-        st.error(f"Błąd czyszczenia bazy typów: {e}")
-
-def load_model_weights():
-    try:
-        res = supabase.table("model_weights").select("*").execute()
-        weights_dict = {}
-        for row in res.data:
-            weights_dict[row.get("team_name")] = {
-                "off_corr": float(row.get("off_corr", 0.0)),
-                "def_corr": float(row.get("def_corr", 0.0))
-            }
-        return weights_dict
-    except Exception:
-        return {}
-
-def save_model_weights(weights_dict):
-    try:
-        for team_name, vals in weights_dict.items():
-            supabase.table("model_weights").upsert({
-                "team_name": team_name,
-                "off_corr": round(vals.get("off_corr", 0.0), 2),
-                "def_corr": round(vals.get("def_corr", 0.0), 2)
-            }).execute()
-    except Exception as e:
-        st.error(f"Błąd zapisu wag do Supabase: {e}")
-
-def update_model_weights_from_bets():
-    bets = load_bets()
-    settled_bets = [
-        b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
-    ]
-    
-    error_logs = {}
-    lr = 0.3
-
-    for bet in settled_bets:
-        match = bet.get("match", "")
-        pick = bet.get("pick", "")
-        status = bet.get("status", "")
-        score_str = bet.get("score", "")
-
-        if "@" not in match or ":" not in score_str:
-            continue
-
+# --- POŁĄCZENIE Z BAZĄ DANYCH W CHMURZE (NEON.TECH) ---
+def get_db_connection():
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
         try:
-            parts_match = match.split(" @ ")
-            a_team = parts_match[0].strip()
-            h_team = parts_match[1].strip()
-        except:
-            continue
+            db_url = st.secrets["DATABASE_URL"]
+        except Exception:
+            st.error("Brak skonfigurowanego URL bazy danych w Secrets (DATABASE_URL)!")
+            st.stop()
+            
+    if "&channel_binding=require" in db_url:
+        db_url = db_url.replace("&channel_binding=require", "")
+    elif "?channel_binding=require" in db_url:
+        db_url = db_url.replace("?channel_binding=require", "")
 
-        if h_team not in error_logs:
-            error_logs[h_team] = {"off_corr": 0.0, "def_corr": 0.0}
-        if a_team not in error_logs:
-            error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
+    conn = psycopg2.connect(db_url)
+    return conn
 
-        if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
-            if pick == h_team:
-                error_logs[h_team]["off_corr"] -= lr
-                error_logs[a_team]["def_corr"] += lr
-            elif pick == a_team:
-                error_logs[a_team]["off_corr"] -= lr
-                error_logs[h_team]["def_corr"] += lr
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bets (
+            id TEXT PRIMARY KEY,
+            date TEXT,
+            sport TEXT,
+            match_name TEXT,
+            odds REAL,
+            ai_prob REAL,
+            edge REAL,
+            stake REAL,
+            status TEXT,
+            profit REAL,
+            home_team TEXT,
+            away_team TEXT,
+            best_pick TEXT,
+            bet_type TEXT DEFAULT 'H2H'
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS weights_history (
+            sport TEXT PRIMARY KEY,
+            w_win_pct REAL,
+            w_advanced REAL,
+            w_form REAL,
+            w_home REAL
+        )
+    ''')
+    
+    cursor.execute('''
+        INSERT INTO weights_history (sport, w_win_pct, w_advanced, w_form, w_home)
+        VALUES ('🏒 NHL Hokej', 0.25, 0.40, 0.20, 0.15)
+        ON CONFLICT (sport) DO NOTHING
+    ''')
+        
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-        elif status == "Przegrany" and ("Over" in pick or "Under" in pick):
-            try:
-                parts_score = score_str.split(":")
-                actual_total = float(parts_score[0]) + float(parts_score[1])
-                line_val = float(pick.split(" ")[1])
-                
-                if "Under" in pick and actual_total > line_val:
-                    error_logs[h_team]["off_corr"] += lr
-                    error_logs[a_team]["off_corr"] += lr
-                elif "Over" in pick and actual_total < line_val:
-                    error_logs[h_team]["off_corr"] -= lr
-                    error_logs[a_team]["off_corr"] -= lr
-            except:
-                pass
+init_db()
 
-    save_model_weights(error_logs)
+def get_sport_weights():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT w_win_pct, w_advanced, w_form, w_home FROM weights_history WHERE sport = '🏒 NHL Hokej'")
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if row:
+        return {"win_pct": row[0], "advanced": row[1], "form": row[2], "home": row[3]}
+    return {"win_pct": 0.25, "advanced": 0.40, "form": 0.20, "home": 0.15}
 
-# --- BEZPIECZNA AUTOMATYZACJA ROZLICZANIA ---
-def auto_settle_bets():
-    bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+def update_weights_after_settlement(bet_won):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    w = get_sport_weights()
+    lr = 0.01 if bet_won else -0.01
+    
+    new_adv = max(0.10, w["advanced"] + lr)
+    new_form = max(0.10, w["form"] + (lr * 0.5))
+    total = w["win_pct"] + new_adv + new_form + w["home"]
+    
+    cursor.execute('''
+        UPDATE weights_history 
+        SET w_win_pct = %s, w_advanced = %s, w_form = %s, w_home = %s
+        WHERE sport = '🏒 NHL Hokej'
+    ''', (w["win_pct"]/total, new_adv/total, new_form/total, w["home"]/total))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def auto_settle_from_api():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, sport, odds, stake, best_pick, home_team, away_team FROM bets WHERE status = 'Oczekujący'")
+    pending_bets = cursor.fetchall()
+    
     if not pending_bets:
+        cursor.close()
+        conn.close()
         return
 
-    pending_dates = set(b.get("date") for b in pending_bets if b.get("date"))
-
-    for date_obj_str in pending_dates:
-        try:
-            dt = datetime.strptime(date_obj_str, "%Y-%m-%d")
-            date_str_espn = dt.strftime("%Y%m%d")
-        except:
-            continue
-
-        url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str_espn}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        try:
-            res = requests.get(url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                events = res.json().get("events", [])
-                for event in events:
-                    status_type = event.get("status", {}).get("type", {}).get("completed", False)
-                    if not status_type:
-                        continue
-
-                    event_date_raw = event.get("date", "")[:10]
-                    if event_date_raw != date_obj_str:
-                        continue
-
-                    competitions = event.get("competitions", [])
-                    if competitions:
-                        comp = competitions[0]
-                        competitors = comp.get("competitors", [])
-                        h_team, a_team, h_score, a_score = None, None, 0, 0
-                        for c in competitors:
-                            t_name = c.get("team", {}).get("displayName", "")
-                            score = int(c.get("score", 0))
-                            if c.get("homeAway") == "home":
-                                h_team = t_name
-                                h_score = score
-                            else:
-                                a_team = t_name
-                                a_score = score
-
-                        if h_team and a_team:
-                            for bet in pending_bets:
-                                if bet.get("date") == date_obj_str:
-                                    match_str = bet.get("match", "")
-                                    if a_team in match_str and h_team in match_str:
-                                        pick = bet.get("pick")
-                                        if "Over" in pick or "Under" in pick:
-                                            total_points = h_score + a_score
-                                            try:
-                                                parts = pick.split(" ")
-                                                line_val = float(parts[1])
-                                                is_over = parts[0] == "Over"
-                                                won_cond = total_points > line_val if is_over else total_points < line_val
-                                                new_status = "Wygrany" if won_cond else "Przegrany"
-                                            except:
-                                                new_status = "Oczekujący"
-                                        else:
-                                            winner = h_team if h_score > a_score else a_team
-                                            new_status = "Wygrany" if pick == winner else "Przegrany"
-
-                                        score_str = f"{a_score}:{h_score}"
-                                        update_bet_status(bet.get("id"), new_status, score_str)
-        except Exception:
-            pass
-
-@st.cache_data(ttl=1800)
-def fetch_nba_standings():
-    now = datetime.now()
-    season_year = now.year + 1 if now.month >= 10 else now.year
-    url = f"https://site.api.espn.com/apis/v2/sports/basketball/nba/standings?season={season_year}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    teams_dict = {}
+    url = f"{ODDS_BASE_URL}/icehockey_nhl/scores"
+    params = {"apiKey": ODDS_API_KEY, "daysFrom": 3}
     try:
-        res = requests.get(url, headers=headers, timeout=3)
-        res.raise_for_status()
-        data = res.json()
-
-        error_logs = load_model_weights()
-
-        for children in data.get("children", []):
-            for entry in children.get("standings", {}).get("entries", []):
-                team_info = entry.get("team", {})
-                team_name = team_info.get("displayName", "Unknown")
-                stats_list = entry.get("stats", [])
-
-                def get_stat(name, default=0.0):
-                    for s in stats_list:
-                        if s.get("name") == name:
-                            return float(s.get("value", default))
-                    return float(default)
-
-                gp = int(get_stat("gamesPlayed", 0))
-                wins = int(get_stat("wins", 0))
-                losses = int(get_stat("losses", 0))
-
-                if gp == 0 and (wins + losses) > 0:
-                    gp = wins + losses
-
-                avg_pts_for = get_stat("avgPointsFor", 112.0)
-                if avg_pts_for == 0.0:
-                    avg_pts_for = 112.0
-                avg_pts_against = get_stat("avgPointsAgainst", 112.0)
-                if avg_pts_against == 0.0:
-                    avg_pts_against = 112.0
-
-                if gp < 5:
-                    weight = gp / 5.0
-                    avg_pts_for = (weight * avg_pts_for) + ((1 - weight) * 112.0)
-                    avg_pts_against = (weight * avg_pts_against) + ((1 - weight) * 112.0)
-
-                base_power = HISTORICAL_POWER_RATINGS.get(team_name, 0.0)
-
-                team_errs = error_logs.get(team_name, {"off_corr": 0.0, "def_corr": 0.0})
-                off_corr = team_errs.get("off_corr", 0.0)
-                def_corr = team_errs.get("def_corr", 0.0)
-
-                adjusted_pts_for = round(avg_pts_for + off_corr, 1)
-                adjusted_pts_against = round(avg_pts_against + def_corr, 1)
-                net_rating = round(adjusted_pts_for - adjusted_pts_against, 2)
-
-                history_weight = round(max(0.1, 1.0 - (gp * 0.05)), 2)
-
-                teams_dict[team_name] = {
-                    "TEAM_NAME": team_name,
-                    "GP": gp,
-                    "W": wins,
-                    "L": losses,
-                    "AVG_PTS_FOR": adjusted_pts_for,
-                    "AVG_PTS_AGAINST": adjusted_pts_against,
-                    "NET_RATING": net_rating,
-                    "OFF_CORR": round(off_corr, 2),
-                    "DEF_CORR": round(def_corr, 2),
-                    "TOTAL_POWER": round(base_power * history_weight, 2),
-                }
-
-        return teams_dict, season_year
-    except Exception as e:
-        st.error(f"Błąd pobierania tabeli NBA z ESPN: {e}")
-        return {}, season_year
-
-@st.cache_data(ttl=900)
-def fetch_live_odds(api_key):
-    if not api_key:
-        return []
-    url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey={api_key}&regions=us,eu&markets=h2h,spreads,totals&oddsFormat=decimal"
-    try:
-        res = requests.get(url, timeout=3)
+        res = requests.get(url, params=params, timeout=10)
         if res.status_code == 200:
-            return res.json()
-        else:
-            return []
-    except Exception:
-        return []
-
-def check_if_team_played_yesterday(team_name):
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={yesterday}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers, timeout=2)
-        if res.status_code == 200:
-            events = res.json().get("events", [])
-            for event in events:
-                name = event.get("name", "")
-                if team_name in name:
-                    return True
+            for match in res.json():
+                if match.get("completed", False):
+                    match_id = str(match.get("id"))
+                    scores = match.get("scores", [])
+                    if scores and len(scores) >= 2:
+                        s1, s2 = int(scores[0].get("score", 0)), int(scores[1].get("score", 0))
+                        t1, t2 = scores[0].get("name"), scores[1].get("name")
+                        for bet in pending_bets:
+                            bet_id, b_sport, odds, stake, best_pick, home, away = bet
+                            if bet_id.split("_")[0] == match_id and b_sport == '🏒 NHL Hokej':
+                                winner = t1 if s1 > s2 else t2
+                                won = (best_pick.lower() in winner.lower() or winner.lower() in best_pick.lower())
+                                status = 'Wygrany' if won else 'Przegrany'
+                                profit = round((odds - 1.0) * stake, 2) if won else round(-stake, 2)
+                                cursor.execute("UPDATE bets SET status = %s, profit = %s WHERE id = %s", (status, profit, bet_id))
+                                conn.commit()
+                                update_weights_after_settlement(won)
     except Exception:
         pass
-    return False
+    cursor.close()
+    conn.close()
 
-# --- NOWOŚĆ: POBIERANIE KONTUZJI TYLKO DLA KONKRETNEJ DRUŻYNY NA ŻĄDANIE (LAZY LOADING) ---
-@st.cache_data(ttl=1800)
-def fetch_team_injuries(team_name):
-    team_injuries = []
-    url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-    headers = {"User-Agent": "Mozilla/5.0"}
+auto_settle_from_api()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_nhl_stats():
+    stats_dict = {}
     try:
-        res = requests.get(url, headers=headers, timeout=3)
+        url = "http://site.api.espn.com/apis/v2/sports/hockey/nhl/standings"
+        res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            for event in data.get("events", []):
-                event_id = event.get("id")
-                summary_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={event_id}"
-                sum_res = requests.get(summary_url, headers=headers, timeout=2)
-                if sum_res.status_code == 200:
-                    sum_data = sum_res.json()
-                    for team_inj in sum_data.get("injuries", []):
-                        t_data = team_inj.get("team", {})
-                        t_name = t_data.get("displayName", "")
-                        # Sprawdzamy dopasowanie nazwy drużyny
-                        if team_name.lower() in t_name.lower() or t_name.lower() in team_name.lower():
-                            for p in team_inj.get("injuries", []):
-                                athlete = p.get("athlete", {})
-                                p_name = athlete.get("displayName", "Unknown")
-                                
-                                raw_status = p.get("status", "Out")
-                                status_desc = raw_status.get("description", "OUT") if isinstance(raw_status, dict) else str(raw_status)
-
-                                raw_type = p.get("type", "Uraz")
-                                injury_type = raw_type.get("name") or raw_type.get("description", "Uraz") if isinstance(raw_type, dict) else str(raw_type)
-
-                                return_date = p.get("returnDate", "Brak terminu")
-                                details = f"Szczegóły: {injury_type} | Powrót ok.: {return_date}"
-
-                                team_injuries.append({
-                                    "player": p_name,
-                                    "status": status_desc,
-                                    "details": details
-                                })
-                            return team_injuries
+            for group in data.get("children", []):
+                for team_entry in group.get("standings", {}).get("entries", []):
+                    team_info = team_entry.get("team", {})
+                    name, nickname = team_info.get("displayName", ""), team_info.get("name", "")
+                    stats = team_entry.get("stats", [])
+                    wins, losses, ot, gf, ga = 0, 0, 0, 0.0, 0.0
+                    for s in stats:
+                        if s.get("name") == "wins": wins = s.get("value", 0)
+                        if s.get("name") == "losses": losses = s.get("value", 0)
+                        if s.get("name") == "otLosses": ot = s.get("value", 0)
+                        if s.get("name") in ["pointsFor", "goalsFor"]: gf = s.get("value", 0.0)
+                        if s.get("name") in ["pointsAgainst", "goalsAgainst"]: ga = s.get("value", 0.0)
+                    tot = wins + losses + ot
+                    win_pct = (wins / tot) if tot > 0 else 0.5
+                    stats_dict[name.lower()] = {"win_pct": win_pct, "gf_g": (gf/tot if tot > 0 else 3.0), "ga_g": (ga/tot if tot > 0 else 3.0)}
+                    stats_dict[nickname.lower()] = {"win_pct": win_pct, "gf_g": (gf/tot if tot > 0 else 3.0), "ga_g": (ga/tot if tot > 0 else 3.0)}
     except Exception:
         pass
-    return team_injuries
+    return stats_dict
 
-# --- PREDYKCJA Z XGBOOST ORAZ INTELIGENTNYM SYSTEMEM KONTUZJI ---
-def predict_matchup(home_team_name, away_team_name, teams_dict, home_b2b=False, away_b2b=False):
-    home_team = teams_dict.get(home_team_name, {})
-    away_team = teams_dict.get(away_team_name, {})
+nhl_stats_cache = fetch_nhl_stats()
 
-    h_off = home_team.get("AVG_PTS_FOR", 112.0)
-    h_def = home_team.get("AVG_PTS_AGAINST", 112.0)
-    a_off = away_team.get("AVG_PTS_FOR", 112.0)
-    a_def = away_team.get("AVG_PTS_AGAINST", 112.0)
-
-    # Pobieramy kontuzje wybiórczo tylko dla tych dwóch drużyn (zero obciążenia serwera)
-    home_injuries = fetch_team_injuries(home_team_name)
-    away_injuries = fetch_team_injuries(away_team_name)
-
-    home_injury_penalty = 0.0
-    away_injury_penalty = 0.0
-
-    # Inteligentna waga kontuzji z odrzuceniem długich L4
-    for idx, inj in enumerate(home_injuries):
-        status_lower = inj.get("status", "").lower()
-        details = inj.get("details", "").lower()
-        
-        if "indefinite" in details or "out for season" in details or "acl" in details or "surgery" in details:
-            continue
-
-        if "out" in status_lower or "doubtful" in status_lower:
-            if idx == 0:
-                home_injury_penalty += 2.0  # Lider / główny starter
-            elif idx == 1:
-                home_injury_penalty += 1.2  # Ważny gracz rotacji
-            else:
-                home_injury_penalty += 0.4  # Głęboki rezerwowy
-
-    for idx, inj in enumerate(away_injuries):
-        status_lower = inj.get("status", "").lower()
-        details = inj.get("details", "").lower()
-        
-        if "indefinite" in details or "out for season" in details or "acl" in details or "surgery" in details:
-            continue
-
-        if "out" in status_lower or "doubtful" in status_lower:
-            if idx == 0:
-                away_injury_penalty += 2.0
-            elif idx == 1:
-                away_injury_penalty += 1.2
-            else:
-                away_injury_penalty += 0.4
-
-    # Twardy sufit bezpieczeństwa (maksymalnie 3.5 pkt kary)
-    home_injury_penalty = min(3.5, home_injury_penalty)
-    away_injury_penalty = min(3.5, away_injury_penalty)
-
-    h_off = max(85.0, h_off - home_injury_penalty)
-    a_off = max(85.0, a_off - away_injury_penalty)
-
-    league_avg_total = 224.0
-    combined_team_pace = (h_off + h_def + a_off + a_def) / 2.0
-    pace_delta = (combined_team_pace - league_avg_total) * 0.45
-
-    home_mismatch_bonus = max(0.0, (h_off - a_def) * 0.3)
-    away_mismatch_bonus = max(0.0, (a_off - h_def) * 0.3)
-
-    fatigue_home = -1.2 if home_b2b else 0.0
-    fatigue_away = -1.8 if away_b2b else 0.0
-
-    net_diff = home_team.get("NET_RATING", 0.0) - away_team.get("NET_RATING", 0.0)
-    power_diff = home_team.get("TOTAL_POWER", 0.0) - away_team.get("TOTAL_POWER", 0.0)
-    home_advantage = 3.0
-
-    expected_home_pts = (
-        (h_off + a_def) / 2
-        + (net_diff / 5)
-        + (power_diff / 3)
-        + (home_advantage / 2)
-        + fatigue_home
-        + (pace_delta / 2)
-        + home_mismatch_bonus
-    )
-    expected_away_pts = (
-        (a_off + h_def) / 2
-        - (net_diff / 5)
-        - (power_diff / 3)
-        - (home_advantage / 2)
-        + fatigue_away
-        + (pace_delta / 2)
-        + away_mismatch_bonus
-    )
-
-    base_total = expected_home_pts + expected_away_pts
-    league_ou_offset = 4.8
-    expected_total_pts = base_total + league_ou_offset
-
-    expected_diff = expected_home_pts - expected_away_pts
-    base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
+# --- PANEL BOCZNY ---
+with st.sidebar:
+    st.markdown("### 🎯 Maksbet.app")
+    st.caption("Advanced NHL Quant Engine")
+    st.markdown("---")
     
+    bankroll = st.number_input("Kapitał początkowy (PLN)", min_value=100, value=1000, step=100)
+    kelly_fraction = st.selectbox("Strategia Kellego", [0.1, 0.25, 0.5], index=1, format_func=lambda x: f"{int(x*100)}% Kellego")
+    min_edge_slider = st.slider("Minimalny Edge (%) do akceptacji", min_value=0.0, max_value=10.0, value=0.5, step=0.5) / 100.0
+    
+    curr_weights = get_sport_weights()
+    st.markdown("---")
+    st.markdown("<b>🧠 Wyuczone Wagi NHL (Baza Neon):</b>", unsafe_allow_html=True)
+    st.caption(f"・ Win %: {round(curr_weights['win_pct']*100, 1)}%")
+    st.caption(f"・ Advanced Goals: {round(curr_weights['advanced']*100, 1)}%")
+    st.caption(f"・ Forma: {round(curr_weights['form']*100, 1)}%")
+    st.caption(f"・ Home Advantage: {round(curr_weights['home']*100, 1)}%")
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_odds():
+    url = f"{ODDS_BASE_URL}/icehockey_nhl/odds"
+    params = {"apiKey": ODDS_API_KEY, "regions": "us", "markets": "h2h", "oddsFormat": "decimal"}
     try:
-        bets = load_bets()
-        settled_moneyline = [
-            b for b in bets 
-            if b.get("status") in ["Wygrany", "Przegrany"] 
-            and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
-        ]
-        
-        if len(settled_moneyline) >= 10:
-            X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
-            
-            xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=50)
-            xgb_model.fit(X_train, y_train)
-            
-            dummy_input = np.array([[1.9]])
-            pred_prob = xgb_model.predict_proba(dummy_input)[0][1]
-            ml_boost = (pred_prob - 0.5) * 0.1
-            prob_home = max(0.12, min(0.88, base_prob_home + ml_boost))
-        else:
-            prob_home = max(0.12, min(0.88, base_prob_home))
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            return res.json(), 200
+        return [], res.status_code
     except Exception:
-        prob_home = max(0.12, min(0.88, base_prob_home))
+        return [], 500
 
-    prob_away = 1 - prob_home
-    handicap = -round(expected_diff * 2) / 2
+raw_matches, status_code = fetch_odds()
+analyzed_h2h = []
 
-    return {
-        "home_pts": round(expected_home_pts, 1),
-        "away_pts": round(expected_away_pts, 1),
-        "total_pts": round(expected_total_pts, 1),
-        "prob_home": prob_home,
-        "prob_away": prob_away,
-        "handicap": handicap,
-        "expected_diff": expected_diff,
-        "home_injuries": home_injuries,
-        "away_injuries": away_injuries,
-    }
+db_conn = get_db_connection()
+cursor = db_conn.cursor()
 
-def calculate_kelly_stake(bankroll, probability, odds):
-    if odds <= 1.0:
-        return 0.0
-    kelly_fraction = (probability * odds - 1.0) / (odds - 1.0)
-    safe_kelly = max(0.0, kelly_fraction * 0.25)
-    return round(bankroll * safe_kelly, 2)
+def find_team_stats(team_name):
+    if not nhl_stats_cache: return None
+    t_lower = team_name.lower()
+    if t_lower in nhl_stats_cache: return nhl_stats_cache[t_lower]
+    for k, v in nhl_stats_cache.items():
+        if k in t_lower or t_lower in k: return v
+    return None
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Smart Injuries + O/U)")
+for m in raw_matches:
+    match_id = m.get('id')
+    home, away = m.get('home_team'), m.get('away_team')
+    commence = m.get('commence_time')
+    
+    oh, oa = 1.90, 1.90
+    books = m.get('bookmakers', [])
+    if books:
+        for mkt in books[0].get('markets', []):
+            if mkt.get('key') == 'h2h':
+                for out in mkt.get('outcomes', []):
+                    if out.get('name') == home: oh = float(out.get('price', 1.90))
+                    elif out.get('name') == away: oa = float(out.get('price', 1.90))
+                    
+    h_s = find_team_stats(home)
+    a_s = find_team_stats(away)
+    if not h_s or not a_s: continue
 
-api_key_input = st.sidebar.text_input(
-    "The Odds API Key", value=DEFAULT_API_KEY, type="password"
-)
-bankroll = st.sidebar.number_input(
-    "Twój Budżet (Bankroll PLN / USD)", min_value=10.0, value=1000.0, step=50.0
-)
+    prob_raw_h = 1.0 / oh if oh > 0 else 0.5
+    prob_raw_a = 1.0 / oa if oa > 0 else 0.5
+    tot_v = prob_raw_h + prob_raw_a
+    implied_h = prob_raw_h / tot_v if tot_v > 0 else 0.5
+    
+    w = curr_weights
+    wd = h_s.get("win_pct", 0.5) - a_s.get("win_pct", 0.5)
+    gf_diff = (h_s.get("gf_g", 3.0) - a_s.get("ga_g", 3.0)) - (a_s.get("gf_g", 3.0) - h_s.get("ga_g", 3.0))
+    stat_delta = (wd * w["win_pct"] * 0.15) + (gf_diff * w["advanced"] * 0.20) + (w["home"] * 0.05)
+    
+    ai_prob_home = np.clip(implied_h + stat_delta, 0.05, 0.95)
+    ai_prob_away = 1.0 - ai_prob_home
+    
+    edge_home = (ai_prob_home * oh) - 1.0
+    edge_away = (ai_prob_away * oa) - 1.0
+    
+    if edge_home >= edge_away:
+        best_pick, best_prob, best_odds, best_edge = home, ai_prob_home, oh, edge_home
+    else:
+        best_pick, best_prob, best_odds, best_edge = away, ai_prob_away, oa, edge_away
+    
+    b = best_odds - 1.0
+    kelly_f = (b * best_prob - (1.0 - best_prob)) / b if b > 0 else 0
+    stake = min(bankroll * 0.04, max(0, bankroll * kelly_f * kelly_fraction))
+    
+    if best_edge >= min_edge_slider and stake > 0:
+        cursor.execute("SELECT id FROM bets WHERE id = %s", (match_id,))
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO bets VALUES (%s, %s, '🏒 NHL Hokej', %s, %s, %s, %s, %s, 'Oczekujący', 0.0, %s, %s, %s, 'H2H')",
+                (match_id, datetime.now().strftime("%Y-%m-%d"), f"{home} vs {away}", float(best_odds), float(best_prob), float(best_edge), float(stake), home, away, best_pick)
+            )
+            db_conn.commit()
 
-st.sidebar.success("🟢 System (XGBoost + Lazy Injuries + Supabase) Aktywny")
+        analyzed_h2h.append({
+            "home": home, "away": away, "commence_time": commence,
+            "best_pick": best_pick, "ai_prob": best_prob, "odds": best_odds, 
+            "edge": best_edge, "stake": round(stake, 2), "implied_h": round(implied_h * 100, 2)
+        })
 
-# Panel boczny: Opcja ręcznego rozliczenia zaległych zakładów
-if st.sidebar.button("🔄 Rozlicz zaległe zakłady"):
-    with st.spinner("Rozliczanie zakładów..."):
-        auto_settle_bets()
-        update_model_weights_from_bets()
-    st.sidebar.success("Zakończono rozliczanie!")
-    st.rerun()
+cursor.close()
+db_conn.close()
+analyzed_h2h.sort(key=lambda x: x['edge'], reverse=True)
 
-# Ładowanie danych głównych (błyskawiczne)
-teams_dict, season_year = fetch_nba_standings()
-live_odds_data = fetch_live_odds(api_key_input)
-
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🏀 Terminarz & Value Bets",
-    "📊 Tabela Ligi & Korekty",
-    "🎯 Rejestr Typów & ROI",
-    "🧠 Stan Samouczenia Modelu (XGBoost)",
+# --- INTERFEJS GŁÓWNY ---
+st.markdown("## 🏒 Maksbet.app - Advanced NHL Quant Terminal")
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🔥 Sygnały Value (NHL)", 
+    "🛡️ Terminal Diagnostyczny", 
+    "📈 Rejestr & Eksport CSV", 
+    "📊 Krzywa Kapitału (Equity)", 
+    "🎯 Zaawansowana Analityka"
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Smart Injury Weights + Moneyline + Kelly)")
-
-    if not live_odds_data:
-        st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
-        all_teams = sorted(list(teams_dict.keys()))
-        if all_teams:
-            c1, c2 = st.columns(2)
-            with c1:
-                manual_home = st.selectbox("Gospodarz:", all_teams, index=0)
-            with c2:
-                manual_away = st.selectbox("Gość:", all_teams, index=1 if len(all_teams) > 1 else 0)
-
-            if manual_home in teams_dict and manual_away in teams_dict:
-                res = predict_matchup(manual_home, manual_away, teams_dict)
-                st.markdown("---")
-                st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
+    st.subheader("Aktualne Value Bets w NHL")
+    if not analyzed_h2h:
+        st.warning("Brak spotkań NHL spełniających kryterium Edge w tym oknie czasowym.")
     else:
-        match_labels = []
-        for m in live_odds_data:
-            commence_time = m.get("commence_time", "")[:16].replace("T", " ")
-            match_labels.append(f"[{commence_time} UTC] {m.get('away_team')} @ {m.get('home_team')}")
-
-        selected_match_label = st.selectbox("Wybierz nadchodzący mecz:", match_labels)
-        match_idx = match_labels.index(selected_match_label)
-        match_info = live_odds_data[match_idx]
-
-        raw_home = match_info.get("home_team")
-        raw_away = match_info.get("away_team")
-
-        matched_home = TEAM_NAME_MAPPING.get(raw_home, raw_home)
-        matched_away = TEAM_NAME_MAPPING.get(raw_away, raw_away)
-
-        if matched_home not in teams_dict:
-            for t_name in teams_dict.keys():
-                if raw_home.strip().lower() == t_name.strip().lower():
-                    matched_home = t_name
-                    break
-
-        if matched_away not in teams_dict:
-            for t_name in teams_dict.keys():
-                if raw_away.strip().lower() == t_name.strip().lower():
-                    matched_away = t_name
-                    break
-
-        if matched_home not in teams_dict:
-            home_mascot = raw_home.strip().lower().split()[-1]
-            for t_name in teams_dict.keys():
-                if home_mascot in t_name.lower():
-                    matched_home = t_name
-                    break
-
-        if matched_away not in teams_dict:
-            away_mascot = raw_away.strip().lower().split()[-1]
-            for t_name in teams_dict.keys():
-                if away_mascot in t_name.lower():
-                    matched_away = t_name
-                    break
-
-        if matched_home not in teams_dict:
-            matched_home = list(teams_dict.keys())[0]
-        if matched_away not in teams_dict:
-            matched_away = list(teams_dict.keys())[1]
-
-        home_b2b = check_if_team_played_yesterday(matched_home)
-        away_b2b = check_if_team_played_yesterday(matched_away)
-
-        res = predict_matchup(matched_home, matched_away, teams_dict, home_b2b, away_b2b)
-
-        # --- RAPORT O KONTUZJACH (DLA WYBRANEGO MECZU) ---
-        st.markdown("### 🏥 Automatyczny Raport o Kontuzjach (Injury Report)")
-        col_i1, col_i2 = st.columns(2)
-        with col_i1:
-            st.markdown(f"**{matched_home} (Gospodarz):**")
-            h_inj = res.get("home_injuries", [])
-            if h_inj:
-                for inj in h_inj:
-                    st.markdown(f"<div class='injury-alert'>❌ <b>{inj.get('player')}</b> [{inj.get('status')}]: {inj.get('details')}</div>", unsafe_allow_html=True)
-            else:
-                st.success("Brak zgłoszonych kontuzji w rotacji.")
-        with col_i2:
-            st.markdown(f"**{matched_away} (Gość):**")
-            a_inj = res.get("away_injuries", [])
-            if a_inj:
-                for inj in a_inj:
-                    st.markdown(f"<div class='injury-alert'>❌ <b>{inj.get('player')}</b> [{inj.get('status')}]: {inj.get('details')}</div>", unsafe_allow_html=True)
-            else:
-                st.success("Brak zgłoszonych kontuzji w rotacji.")
-
-        st.markdown("---")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
-        with c2:
-            st.metric("Szacowana Suma Pkt", f"{res.get('total_pts')} pkt")
-        with c3:
-            st.metric(f"Szansa {matched_home} (ML)", f"{res.get('prob_home')*100:.1f}%")
-        with c4:
-            st.metric(f"Szansa {matched_away} (ML)", f"{res.get('prob_away')*100:.1f}%")
-
-        st.markdown("---")
-        st.subheader("🎯 Kalkulator Value Betów (Moneyline) + Stawka Kelly'ego")
-
-        bookmakers = match_info.get("bookmakers", [])
-        bookie_h_odds, bookie_a_odds = 0.0, 0.0
-        spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
-        total_bookie_line, total_over_odds, total_under_odds = 0.0, 1.9, 1.9
-
-        if bookmakers:
-            for bookie in bookmakers:
-                for market in bookie.get("markets", []):
-                    if market.get("key") == "h2h":
-                        for out in market.get("outcomes", []):
-                            out_name = out.get("name")
-                            if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
-                                bookie_h_odds = float(out.get("price", 1.9))
-                            elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
-                                bookie_a_odds = float(out.get("price", 1.9))
-                    elif market.get("key") == "spreads":
-                        for out in market.get("outcomes", []):
-                            out_name = out.get("name")
-                            if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
-                                spread_bookie_line = float(out.get("point", 0.0))
-                                spread_bookie_odds = float(out.get("price", 1.9))
-                                spread_team = matched_home
-                    elif market.get("key") == "totals":
-                        for out in market.get("outcomes", []):
-                            if out.get("name") == "Over":
-                                total_bookie_line = float(out.get("point", 220.0))
-                                total_over_odds = float(out.get("price", 1.9))
-                            elif out.get("name") == "Under":
-                                total_under_odds = float(out.get("price", 1.9))
-
-        fair_home = round(1 / res.get("prob_home"), 2)
-        fair_away = round(1 / res.get("prob_away"), 2)
-
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            st.write(f"**{matched_home} (Gospodarz)**")
-            st.write(f"Kurs Sprawiedliwy: **{fair_home:.2f}** | Bukmacher: **{bookie_h_odds if bookie_h_odds > 0 else 'Brak'}**")
-
-            if bookie_h_odds > 0:
-                ev_h = (res.get("prob_home") * bookie_h_odds) - 1
-                kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
-                if ev_h > 0.03:
-                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
-                    if st.button("➕ Zapisz typ gospodarza"):
-                        save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_home, bookie_h_odds)
-                        st.success("Zapisano automatycznie w chmurze Supabase!")
-                        st.rerun()
-                else:
-                    st.error(f"❌ Brak realnego Value (Szum statystyczny). EV: {ev_h*100:.1f}%")
-
-        with col_b2:
-            st.write(f"**{matched_away} (Gość)**")
-            st.write(f"Kurs Sprawiedliwy: **{fair_away:.2f}** | Bukmacher: **{bookie_a_odds if bookie_a_odds > 0 else 'Brak'}**")
-
-            if bookie_a_odds > 0:
-                ev_a = (res.get("prob_away") * bookie_a_odds) - 1
-                kelly_stake_a = calculate_kelly_stake(bankroll, res.get("prob_away"), bookie_a_odds)
-                if ev_a > 0.03:
-                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
-                    if st.button("➕ Zapisz typ gościa"):
-                        save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_away, bookie_a_odds)
-                        st.success("Zapisano automatycznie w chmurze Supabase!")
-                        st.rerun()
-                else:
-                    st.error(f"❌ Brak realnego Value (Szum statystyczny). EV: {ev_a*100:.1f}%")
-
-        st.markdown("---")
-        st.subheader("📊 Analiza Rynku Over / Under (Suma Punktów)")
-        st.write(f"• **Szacowana suma punktów przez model:** `{res.get('total_pts')} pkt`")
-        if total_bookie_line > 0.0:
-            st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
-            diff_total = res.get("total_pts") - total_bookie_line
-            if diff_total > 2.5:
-                st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
-                if st.button("➕ Zapisz typ OVER"):
-                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Over {total_bookie_line}", total_over_odds)
-                    st.success("Zapisano Over do bazy!")
-                    st.rerun()
-            elif diff_total < -2.5:
-                st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}** (Model przewiduje o {abs(diff_total):.1f} pkt mniej!)")
-                if st.button("➕ Zapisz typ UNDER"):
-                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Under {total_bookie_line}", total_under_odds)
-                    st.success("Zapisano Under do bazy!")
-                    st.rerun()
-            else:
-                st.info("ℹ️ Linia bukmachera jest bliska szacunkom modelu - brak wyraźnej przewagi.")
-        else:
-            st.info("Brak dostępnych rynków Total Points u bukmachera.")
-
-        st.markdown("---")
-        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
-
-        raw_diff = res.get("expected_diff")
-        safety_buffer = 3.0
-
-        if raw_diff > 0:
-            model_margin = raw_diff
-            recommended_team = matched_home
-            safe_spread = -(model_margin - safety_buffer)
-        else:
-            model_margin = abs(raw_diff)
-            recommended_team = matched_away
-            safe_spread = -(model_margin - safety_buffer)
-
-        safe_spread = round(safe_spread * 2) / 2
-
-        st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
-        st.write(f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):** **{recommended_team} ({safe_spread:+.1f})**")
-
-        if spread_bookie_line != 0.0:
-            if spread_team == recommended_team:
-                bookie_team_spread = spread_bookie_line
-            else:
-                bookie_team_spread = -spread_bookie_line
-
-            if bookie_team_spread > safe_spread:
-                st.success(f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię ({bookie_team_spread:+.1f}) dla {recommended_team}!")
-            else:
-                st.info("ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego zapasu.")
+        for m in analyzed_h2h:
+            st.markdown(f"""
+                <div class="value-card">
+                    <h3>{m['home']} vs {m['away']}</h3>
+                    <p style="color: #94a3b8; font-size: 12px;">Start: {m.get('commence_time', 'Najbliższe godziny')}</p>
+                    <p>🎯 <b>Typ AI:</b> <span style="color: #60a5fa;">{m['best_pick']}</span> (Kurs: {m['odds']})</p>
+                    <p>🔥 <b>Value:</b> <span style="color: #34d399;">+{round(m['edge']*100, 1)}%</span> | 💰 <b>Stawka Kellego:</b> {m['stake']} PLN</p>
+                </div>
+            """, unsafe_allow_html=True)
+            st.progress(m['ai_prob'], text=f"Szanse AI: {round(m['ai_prob']*100, 1)}%")
+            st.divider()
 
 with tab2:
-    st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
-    if teams_dict:
-        df = pd.DataFrame(list(teams_dict.values()))
-        df = df.sort_values(by="NET_RATING", ascending=False).reset_index(drop=True)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    st.subheader("🛡️ Status API oraz Bazy Danych")
+    status_icon = "✅ OK" if status_code == 200 else "❌ Błąd"
+    st.markdown(f"""
+        <div class="test-box">
+        <b>The Odds API (NHL):</b> Status HTTP {status_code} ({status_icon})<br>
+        <b>Baza Neon.tech:</b> Połączenie aktywne ✅
+        </div>
+    """, unsafe_allow_html=True)
 
 with tab3:
-    st.subheader("📊 Krzywa Kapitału na żywo (Equity Curve)")
-    bets = load_bets()
-    if not bets:
-        st.info("Brak zapisanych typów w bazie chmurowej Supabase.")
+    st.subheader("📈 Rejestr Zakładów & Eksport danych")
+    conn_s = get_db_connection()
+    df_settled = pd.read_sql("SELECT * FROM bets", conn_s)
+    conn_s.close()
+    
+    if df_settled.empty:
+        st.info("Brak wpisów w bazie danych.")
     else:
-        df_bets = pd.DataFrame(bets)
-
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
-        if settled:
-            settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
-            
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
-            win_rate = (len(won) / len(settled_sorted)) * 100
-            total_staked = len(settled_sorted)
-            total_returns = sum([b.get("odds", 1.9) for b in won])
-            total_profit = total_returns - total_staked
-            roi = ((total_returns - total_staked) / total_staked) * 100 if total_staked > 0 else 0.0
-
-            c_m1, c_m2 = st.columns(2)
-            with c_m1:
-                badge_class = "metric-badge-green" if total_profit >= 0 else "metric-badge-red"
-                sign = "+" if total_profit >= 0 else ""
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Łączny Zysk (PLN)</div>
-                    <div class="metric-value">{sign}{total_profit:.2f} PLN</div>
-                    <div class="{badge_class}">↑ {sign}{total_profit:.2f} PLN</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                badge_win = "metric-badge-green" if win_rate >= 50.0 else "metric-badge-red"
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Skuteczność (Win Rate)</div>
-                    <div class="metric-value">{win_rate:.1f}%</div>
-                    <div class="{badge_win}">↑ {len(won)}/{len(settled_sorted)}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with c_m2:
-                badge_roi = "metric-badge-green" if roi >= 0 else "metric-badge-red"
-                sign_roi = "+" if roi >= 0 else ""
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Wskaźnik ROI (%)</div>
-                    <div class="metric-value">{sign_roi}{roi:.2f}%</div>
-                    <div class="{badge_roi}">↑ {sign_roi}{roi:.2f}%</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Suma Stawiona</div>
-                    <div class="metric-value">{total_staked * 10.0:.2f} PLN</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            st.markdown("---")
-            chart_data = []
-            current_capital = bankroll
-            
-            chart_data.append({
-                "Liczba rozliczonych zakładów": 0,
-                "Kapitał (PLN)": round(current_capital, 2)
-            })
-
-            for i, b in enumerate(settled_sorted):
-                odds_val = float(b.get("odds", 1.9))
-                unit_stake = 10.0
-                if b.get("status") == "Wygrany":
-                    current_capital += (odds_val - 1.0) * unit_stake
-                else:
-                    current_capital -= unit_stake
-
-                chart_data.append({
-                    "Liczba rozliczonych zakładów": i + 1,
-                    "Kapitał (PLN)": round(current_capital, 2)
-                })
-
-            df_chart = pd.DataFrame(chart_data)
-
-            line = alt.Chart(df_chart).mark_line(
-                color='#00E676',
-                strokeWidth=3,
-                interpolate='monotone'
-            ).encode(
-                x=alt.X('Liczba rozliczonych zakładów:Q', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
-                y=alt.Y('Kapitał (PLN):Q', scale=alt.Scale(zero=False), axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
-                tooltip=['Liczba rozliczonych zakładów', 'Kapitał (PLN)']
-            )
-
-            points = alt.Chart(df_chart).mark_circle(
-                color='#00E676',
-                size=40
-            ).encode(
-                x='Liczba rozliczonych zakładów:Q',
-                y='Kapitał (PLN):Q'
-            )
-
-            chart_combined = (line + points).properties(
-                height=380
-            ).configure_view(
-                strokeWidth=0,
-                fill='#0d1117'
-            )
-
-            st.altair_chart(chart_combined, use_container_width=True)
-
-        st.markdown("---")
-        st.subheader("📋 Historia Zapisanych Typów")
-        st.dataframe(df_bets, use_container_width=True, hide_index=True)
-
-        if st.button("Wyczyść całą bazę typów w chmurze"):
-            clear_bets()
-            st.rerun()
+        st.dataframe(df_settled, use_container_width=True)
+        csv_data = df_settled.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Pobierz pełny rejestr zakładów (CSV)",
+            data=csv_data,
+            file_name="maksbet_nhl_bets.csv",
+            mime="text/csv",
+        )
 
 with tab4:
-    st.subheader("🧠 Stan Samouczenia Modelu (XGBoost Classifier)")
-    st.info("🤖 Potężny silnik XGBoost analizuje Twoje zebrane typy w Supabase i optymalizuje predykcje.")
+    st.subheader("📊 Krzywa Kapitału na żywo (Equity Curve)")
+    conn_eq = get_db_connection()
+    df_eq = pd.read_sql("SELECT date, profit, status FROM bets WHERE status != 'Oczekujący' ORDER BY date ASC", conn_eq)
+    conn_eq.close()
     
-    error_logs_data = load_model_weights()
-    if not error_logs_data:
-        st.info("Model nie wprowadził jeszcze żadnych korekt. Wagi dla wszystkich drużyn wynoszą obecnie 0.0.")
+    if df_eq.empty:
+        st.info("Brak rozliczonych zakładów do wygenerowania krzywej kapitału.")
     else:
-        weights_list = []
-        for team, vals in error_logs_data.items():
-            weights_list.append({
-                "Drużyna": team,
-                "Korekta Ofensywna (OFF_CORR)": vals.get("off_corr", 0.0),
-                "Korekta Defensywna (DEF_CORR)": vals.get("def_corr", 0.0)
-            })
-        df_weights = pd.DataFrame(weights_list)
-        df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
-        st.dataframe(df_weights, use_container_width=True, hide_index=True)
+        df_eq['cumulative_profit'] = df_eq['profit'].cumsum() + bankroll
+        df_eq['index'] = range(1, len(df_eq) + 1)
+        
+        chart = alt.Chart(df_eq).mark_line(point=True, strokeWidth=3, color='#10b981').encode(
+            x=alt.X('index:Q', title='Liczba rozliczonych zakładów'),
+            y=alt.Y('cumulative_profit:Q', title='Kapitał (PLN)', scale=alt.Scale(zero=False)),
+            tooltip=['date', 'cumulative_profit', 'profit', 'status']
+        ).properties(height=400)
+        st.altair_chart(chart, use_container_width=True)
+
+with tab5:
+    st.subheader("🎯 Zaawansowane Statystyki Analityczne")
+    conn_an = get_db_connection()
+    df_an = pd.read_sql("SELECT * FROM bets WHERE status != 'Oczekujący'", conn_an)
+    conn_an.close()
+    
+    if df_an.empty:
+        st.info("Zaawansowana analityka uaktywni się po rozliczeniu pierwszych zakładów.")
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 📌 Podział Gospodarz vs Gość")
+            try:
+                df_an['is_home'] = df_an['best_pick'] == df_an['home_team']
+                split_summary = df_an.groupby('is_home', observed=False).agg(
+                    Zakłady=('id', 'count'),
+                    Zysk=('profit', 'sum')
+                ).reset_index()
+                split_summary['Typ zakładu'] = split_summary['is_home'].map({True: 'Gospodarz (Home)', False: 'Gość (Away)'})
+                st.dataframe(split_summary[['Typ zakładu', 'Zakłady', 'Zysk']], use_container_width=True)
+            except Exception as e:
+                st.info("Za mało danych do podziału Gospodarz/Gość.")
+
+        with col2:
+            st.markdown("#### 🎯 Skuteczność wg Przedziałów Kursów")
+            try:
+                bins = [1.0, 1.5, 2.0, 3.0, 10.0]
+                labels = ['1.00 - 1.50', '1.51 - 2.00', '2.01 - 3.00', '3.00+']
+                df_an['odds_bin'] = pd.cut(df_an['odds'], bins=bins, labels=labels, right=False)
+                odds_summary = df_an.groupby('odds_bin', observed=False).agg(
+                    Zakłady=('id', 'count'),
+                    Zysk=('profit', 'sum')
+                ).reset_index()
+                st.dataframe(odds_summary, use_container_width=True)
+            except Exception as e:
+                st.info("Za mało danych do przedziałów kursów.")
+            
+        st.markdown("---")
+        st.markdown("#### 📉 Reliability Diagram (Kalibracja Modelu AI)")
+        st.caption("Porównanie pewności modelu z rzeczywistymi trafiami w przedziałach prawdopodobieństwa")
+        
+        try:
+            prob_bins = [0.0, 0.5, 0.6, 0.7, 0.8, 1.0]
+            prob_labels = ['< 50%', '50-60%', '60-70%', '70-80%', '80%+']
+            df_an['prob_bin'] = pd.cut(df_an['ai_prob'], bins=prob_bins, labels=prob_labels, right=False)
+            calib = df_an.groupby('prob_bin', observed=False).agg(
+                Wszystkie=('id', 'count'),
+                Trafione=('status', lambda x: (x == 'Wygrany').sum())
+            ).reset_index()
+            calib['Rzeczywista Skuteczność'] = np.where(calib['Wszystkie'] > 0, (calib['Trafione'] / calib['Wszystkie'] * 100).round(1), 0)
+            st.dataframe(calib, use_container_width=True)
+        except Exception as e:
+                st.info("Za mało danych do przedziałów kursów.")
+            
+        st.markdown("---")
+        st.markdown("#### 📉 Reliability Diagram (Kalibracja Modelu AI)")
+        st.caption("Porównanie pewności modelu z rzeczywistymi trafiami w przedziałach prawdopodobieństwa")
+        
+        try:
+            prob_bins = [0.0, 0.5, 0.6, 0.7, 0.8, 1.0]
+            prob_labels = ['< 50%', '50-60%', '60-70%', '70-80%', '80%+']
+            df_an['prob_bin'] = pd.cut(df_an['ai_prob'], bins=prob_bins, labels=prob_labels, right=False)
+            calib = df_an.groupby('prob_bin', observed=False).agg(
+                Wszystkie=('id', 'count'),
+                Trafione=('status', lambda x: (x == 'Wygrany').sum())
+            ).reset_index()
+            calib['Rzeczywista Skuteczność'] = np.where(calib['Wszystkie'] > 0, (calib['Trafione'] / calib['Wszystkie'] * 100).round(1), 0)
+            st.dataframe(calib, use_container_width=True)
+        except Exception as e:
+            st.info("Brak wystarczających danych do kalibracji.")
+    
