@@ -68,7 +68,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_API_KEY = "62e230538ba5e8f6ff0aa80fcdbb481c"
+DEFAULT_API_KEY = "99664b27d26274c81d967d9d5962dfc2"
 
 # --- INICJALIZACJA CHMURY SUPABASE ---
 @st.cache_resource
