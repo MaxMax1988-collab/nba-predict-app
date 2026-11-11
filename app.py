@@ -258,10 +258,10 @@ def update_model_weights_from_bets():
             error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
         if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
-            if pick == h_team:
+            if pick == h_team or h_team in pick:
                 error_logs[h_team]["off_corr"] -= lr
                 error_logs[a_team]["def_corr"] += lr
-            elif pick == a_team:
+            elif pick == a_team or a_team in pick:
                 error_logs[a_team]["off_corr"] -= lr
                 error_logs[h_team]["def_corr"] += lr
 
@@ -271,7 +271,7 @@ def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący" or b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -307,13 +307,18 @@ def auto_settle_from_odds_api(api_key):
                                (a_team.lower() in match_str.lower() or a_team.split()[-1].lower() in match_str.lower()):
                                 
                                 pick = bet.get("pick", "")
-                                if "Over" in pick or "Under" in pick:
-                                    total_points = h_score + a_score
+                                # Rozstrzyganie handicapów / spreadów
+                                if "(" in pick and ")" in pick:
                                     try:
-                                        parts = pick.split(" ")
-                                        line_val = float(parts[1])
-                                        is_over = parts[0] == "Over"
-                                        won = total_points > line_val if is_over else total_points < line_val
+                                        team_part = pick.split("(")[0].strip()
+                                        spread_val = float(pick.split("(")[1].replace(")", "").replace("+", ""))
+                                        
+                                        if team_part.lower() in h_team.lower() or h_team.lower() in team_part.lower():
+                                            adjusted_h_score = h_score + spread_val
+                                            won = adjusted_h_score > a_score
+                                        else:
+                                            adjusted_a_score = a_score + spread_val
+                                            won = adjusted_a_score > h_score
                                         new_status = "Wygrany" if won else "Przegrany"
                                     except:
                                         new_status = "Oczekujący"
@@ -737,11 +742,26 @@ with tab1:
             else:
                 bookie_team_spread = -spread_bookie_line
 
-            st.write(f"• **Aktualna linia bukmachera:** `{bookie_team_spread:+.1f}`")
+            st.write(f"• **Aktualna linia bukmachera:** `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)")
+            
             if bookie_team_spread > safe_spread:
                 st.success(f"✅ **REKOMENDACJA:** Linia bukmachera oferuje bezpieczny zapas punktowy dla **{recommended_team}**!")
             else:
                 st.info("ℹ️ Linia bukmachera jest ciasna - zachowaj ostrożność.")
+
+            # Fizyczny przycisk zapisu handicapu do Supabase + automatyczne rozliczanie
+            pick_label = f"{recommended_team} ({bookie_team_spread:+.1f})"
+            if st.button(f"➕ Zapisz typ z handicapem: {pick_label}", key="save_spread_btn"):
+                save_bet(
+                    datetime.now().strftime("%Y-%m-%d"), 
+                    f"{matched_away} @ {matched_home}", 
+                    pick_label, 
+                    spread_bookie_odds
+                )
+                st.success(f"Zapisano handicap {pick_label} w chmurze Supabase!")
+                st.rerun()
+        else:
+            st.info("Brak dostępnych rynków Spread (Handicap) u bukmachera dla tego meczu.")
 
 with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
