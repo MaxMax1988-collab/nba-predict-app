@@ -680,7 +680,6 @@ with tab1:
                 ev_h = (res.get("prob_home") * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
                 
-                # Filtr korytarza zysku (unikamy kursów ekstremalnych > 2.80)
                 if ev_h > 0 and 1.40 <= bookie_h_odds <= 2.80:
                     st.success(f"✅ OPTYMALNY VALUE! EV: +{ev_h*100:.1f}% | Stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                 elif bookie_h_odds > 2.80:
