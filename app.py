@@ -257,6 +257,7 @@ def update_model_weights_from_bets():
         if a_team not in error_logs:
             error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
+        # Ignorujemy stare wpisy O/U w samouczeniu wag punktowych
         if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
             if pick == h_team:
                 error_logs[h_team]["off_corr"] -= lr
@@ -264,21 +265,6 @@ def update_model_weights_from_bets():
             elif pick == a_team:
                 error_logs[a_team]["off_corr"] -= lr
                 error_logs[h_team]["def_corr"] += lr
-
-        elif status == "Przegrany" and ("Over" in pick or "Under" in pick):
-            try:
-                parts_score = score_str.split(":")
-                actual_total = float(parts_score[0]) + float(parts_score[1])
-                line_val = float(pick.split(" ")[1])
-                
-                if "Under" in pick and actual_total > line_val:
-                    error_logs[h_team]["off_corr"] += lr
-                    error_logs[a_team]["off_corr"] += lr
-                elif "Over" in pick and actual_total < line_val:
-                    error_logs[h_team]["off_corr"] -= lr
-                    error_logs[a_team]["off_corr"] -= lr
-            except:
-                pass
 
     save_model_weights(error_logs)
 
@@ -526,7 +512,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + O/U + Handicaps + Injury Toggles)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Korytarz Zysku + Handicapy)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -541,7 +527,7 @@ if st.sidebar.button("🔄 Rozlicz zaległe mecze (The Odds API)"):
     st.sidebar.success("Zakończono rozliczanie!")
     st.rerun()
 
-st.sidebar.success("🟢 System (XGBoost + Supabase + O/U + Handicaps) Aktywny")
+st.sidebar.success("🟢 System (XGBoost + Supabase + Handicapy) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -559,7 +545,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Moneyline, Handicap, Over/Under & Kelly Stake)")
+    st.subheader("Nadchodzące mecze (Moneyline w Korytarzu Zysku & Bezpieczne Handicapy)")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -651,19 +637,18 @@ with tab1:
         with c1:
             st.metric("Skorygowany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
         with c2:
-            st.metric("Szacowana Suma Pkt", f"{res.get('total_pts')} pkt")
+            st.metric("Szacowana Różnica", f"{res.get('expected_diff'):+.1f} pkt")
         with c3:
             st.metric(f"Szansa {matched_home} (ML)", f"{res.get('prob_home')*100:.1f}%")
         with c4:
             st.metric(f"Szansa {matched_away} (ML)", f"{res.get('prob_away')*100:.1f}%")
 
         st.markdown("---")
-        st.subheader("🎯 Kalkulator Value Betów (Moneyline) + Stawka Kelly'ego")
+        st.subheader("🎯 Kalkulator Value Betów (Moneyline w Korytarzu Zysku) + Stawka Kelly'ego")
 
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
         spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
-        total_bookie_line, total_over_odds, total_under_odds = 0.0, 1.9, 1.9
 
         if bookmakers:
             for bookie in bookmakers:
@@ -682,13 +667,6 @@ with tab1:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
-                    elif market.get("key") == "totals":
-                        for out in market.get("outcomes", []):
-                            if out.get("name") == "Over":
-                                total_bookie_line = float(out.get("point", 220.0))
-                                total_over_odds = float(out.get("price", 1.9))
-                            elif out.get("name") == "Under":
-                                total_under_odds = float(out.get("price", 1.9))
 
         fair_home = round(1 / res.get("prob_home"), 2)
         fair_away = round(1 / res.get("prob_away"), 2)
@@ -701,8 +679,12 @@ with tab1:
             if bookie_h_odds > 0:
                 ev_h = (res.get("prob_home") * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
-                if ev_h > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_h*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
+                
+                # Filtr korytarza zysku (unikamy kursów ekstremalnych > 2.80)
+                if ev_h > 0 and 1.40 <= bookie_h_odds <= 2.80:
+                    st.success(f"✅ OPTYMALNY VALUE! EV: +{ev_h*100:.1f}% | Stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
+                elif bookie_h_odds > 2.80:
+                    st.warning(f"⚠️ Kurs powyżej 2.80 (poza złotym korytarzem zysku). Zalecamy ostrożność.")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
@@ -718,8 +700,11 @@ with tab1:
             if bookie_a_odds > 0:
                 ev_a = (res.get("prob_away") * bookie_a_odds) - 1
                 kelly_stake_a = calculate_kelly_stake(bankroll, res.get("prob_away"), bookie_a_odds)
-                if ev_a > 0:
-                    st.success(f"✅ VALUE BET! EV: +{ev_a*100:.1f}% | Sugerowana stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
+                
+                if ev_a > 0 and 1.40 <= bookie_a_odds <= 2.80:
+                    st.success(f"✅ OPTYMALNY VALUE! EV: +{ev_a*100:.1f}% | Stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
+                elif bookie_a_odds > 2.80:
+                    st.warning(f"⚠️ Kurs powyżej 2.80 (poza złotym korytarzem zysku). Zalecamy ostrożność.")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
@@ -729,33 +714,11 @@ with tab1:
                     st.rerun()
 
         st.markdown("---")
-        st.subheader("📊 Analiza Rynku Over / Under (Suma Punktów)")
-        st.write(f"• **Szacowana suma punktów przez model:** `{res.get('total_pts')} pkt`")
-        if total_bookie_line > 0.0:
-            st.write(f"• **Linia bukmachera:** `{total_bookie_line} pkt` (Over: `{total_over_odds}`, Under: `{total_under_odds}`)")
-            diff_total = res.get("total_pts") - total_bookie_line
-            if diff_total > 2.5:
-                st.success(f"✅ **Rekomendacja:** **OVER {total_bookie_line}** (Model przewiduje o {diff_total:.1f} pkt więcej!)")
-                if st.button("➕ Zapisz typ OVER", key="save_over_btn"):
-                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Over {total_bookie_line}", total_over_odds)
-                    st.success("Zapisano Over do bazy!")
-                    st.rerun()
-            elif diff_total < -2.5:
-                st.success(f"✅ **Rekomendacja:** **UNDER {total_bookie_line}** (Model przewiduje o {abs(diff_total):.1f} pkt mniej!)")
-                if st.button("➕ Zapisz typ UNDER", key="save_under_btn"):
-                    save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", f"Under {total_bookie_line}", total_under_odds)
-                    st.success("Zapisano Under do bazy!")
-                    st.rerun()
-            else:
-                st.info("ℹ️ Linia bukmachera jest bliska szacunkom modelu - brak wyraźnej przewagi.")
-        else:
-            st.info("Brak dostępnych rynków Total Points u bukmachera.")
-
-        st.markdown("---")
-        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów")
+        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów (+Spread)")
+        st.info("💡 Zgodnie z nową strategią, przy kursach outsiderów lub wyższym ryzyku stosujemy dodatnie handicapy (np. Utah Jazz (+13.5) lub Portland (+7.5)).")
 
         raw_diff = res.get("expected_diff")
-        safety_buffer = 3.0
+        safety_buffer = 3.5
 
         if raw_diff > 0:
             model_margin = raw_diff
@@ -769,7 +732,7 @@ with tab1:
         safe_spread = round(safe_spread * 2) / 2
 
         st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
-        st.write(f"• **Rekomendowany bezpieczny handicap (z buforem {safety_buffer} pkt):** **{recommended_team} ({safe_spread:+.1f})**")
+        st.write(f"• **Sugerowany bezpieczny bufor handicapu:** **{recommended_team} ({safe_spread:+.1f})**")
 
         if spread_bookie_line != 0.0:
             if spread_team == recommended_team:
@@ -777,10 +740,11 @@ with tab1:
             else:
                 bookie_team_spread = -spread_bookie_line
 
+            st.write(f"• **Aktualna linia bukmachera:** `{bookie_team_spread:+.1f}`")
             if bookie_team_spread > safe_spread:
-                st.success(f"✅ **OKAZJA NA HANDICAP:** Bukmacher daje bardzo bezpieczną linię ({bookie_team_spread:+.1f}) dla {recommended_team}!")
+                st.success(f"✅ **REKOMENDACJA:** Linia bukmachera oferuje bezpieczny zapas punktowy dla **{recommended_team}**!")
             else:
-                st.info("ℹ️ Linia bukmachera mieści się w granicach ryzyka - brak wyraźnego zapasu.")
+                st.info("ℹ️ Linia bukmachera jest ciasna - zachowaj ostrożność.")
 
 with tab2:
     st.subheader(f"📊 Tabela Sezonu {season_year-1}/{season_year} (Wieloczynnikowa)")
@@ -924,3 +888,4 @@ with tab4:
         df_weights = pd.DataFrame(weights_list)
         df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
         st.dataframe(df_weights, use_container_width=True, hide_index=True)
+                manual_home = st.selectbox("Gospodarz:", all
