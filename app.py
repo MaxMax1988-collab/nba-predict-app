@@ -230,7 +230,7 @@ def update_model_weights_from_bets():
     bets = load_bets()
     settled_bets = [
         b for b in bets
-        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score") != ""
+        if b.get("status") in ["Wygrany", "Przegrany"] and b.get("score"] != ""
     ]
     
     error_logs = {}
@@ -257,7 +257,6 @@ def update_model_weights_from_bets():
         if a_team not in error_logs:
             error_logs[a_team] = {"off_corr": 0.0, "def_corr": 0.0}
 
-        # Ignorujemy stare wpisy O/U w samouczeniu wag punktowych
         if status == "Przegrany" and not ("Over" in pick or "Under" in pick):
             if pick == h_team:
                 error_logs[h_team]["off_corr"] -= lr
@@ -427,7 +426,6 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- SZYBKI ZBUFOROWANY MODEL (ZAPOBIEGA BLOKOWANIU SUWAKÓW) ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_xgb_modifier():
     try:
@@ -764,7 +762,7 @@ with tab3:
         if settled:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status"] == "Wygrany")
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
@@ -887,4 +885,3 @@ with tab4:
         df_weights = pd.DataFrame(weights_list)
         df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
         st.dataframe(df_weights, use_container_width=True, hide_index=True)
-                manual_home = st.selectbox("Gospodarz:", all
