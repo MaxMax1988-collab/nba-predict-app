@@ -271,7 +271,7 @@ def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący" or b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -310,7 +310,8 @@ def auto_settle_from_odds_api(api_key):
                                 if "(" in pick and ")" in pick:
                                     try:
                                         team_part = pick.split("(")[0].strip()
-                                        spread_val = float(pick.split("(")[1].replace(")", "").replace("+", ""))
+                                        raw_val_str = pick.split("(")[1].replace(")", "")
+                                        spread_val = float(raw_val_str)
                                         
                                         if team_part.lower() in h_team.lower() or h_team.lower() in team_part.lower():
                                             adjusted_h_score = h_score + spread_val
@@ -722,30 +723,21 @@ with tab1:
         safety_buffer = 3.5
 
         if raw_diff > 0:
-            model_margin = raw_diff
             recommended_team = matched_home
-            safe_spread = -(model_margin - safety_buffer)
-        else:
-            model_margin = abs(raw_diff)
-            recommended_team = matched_away
-            safe_spread = -(model_margin - safety_buffer)
-
-        safe_spread = round(safe_spread * 2) / 2
-
-        # USTALENIE KIM JEST RECOMMENDOWANA DRUŻYNA (FAWORYT CZY OUTSIDER)
-        # Jeśli różnica jest na korzyść gospodarza, to gość jest outsiderem i na odwrót
-        if raw_diff > 0:
             fav_team = matched_home
             dog_team = matched_away
+            fav_safe_spread = -round((raw_diff - safety_buffer) * 2) / 2
             dog_safe_spread = round((raw_diff + safety_buffer) * 2) / 2
         else:
+            recommended_team = matched_away
             fav_team = matched_away
             dog_team = matched_home
+            fav_safe_spread = -round((abs(raw_diff) - safety_buffer) * 2) / 2
             dog_safe_spread = round((abs(raw_diff) + safety_buffer) * 2) / 2
 
-        st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
-        st.write(f"• **Sugerowany bezpieczny bufor dla Faworyta ({recommended_team}):** `{safe_spread:+.1f}`")
-        st.write(f"• **Sugerowany bezpieczny bufor dla Outsidera ({dog_team}):** **`{dog_team} (+{dog_safe_spread})`**")
+        st.write(f"• **Przewidywana przewaga modelu:** `{abs(raw_diff):.1f} pkt` dla **{recommended_team}**")
+        st.write(f"• **Sugerowany bezpieczny bufor dla Faworyta ({fav_team}):** `{fav_safe_spread:+.1f}`")
+        st.write(f"• **Sugerowany bezpieczny bufor dla Outsidera ({dog_team}):** **`+{dog_safe_spread}`**")
 
         if spread_bookie_line != 0.0:
             if spread_team == recommended_team:
@@ -755,11 +747,10 @@ with tab1:
 
             st.write(f"• **Aktualna linia bukmachera dla {recommended_team}:** `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)")
             
-            # NAPRAWIONY PRZYCISK ZAPISU - TERAZ W PEŁNI ROZPOZNAJE I DAJE WYBÓR FLAWORYTA LUB OUTSIDERA
             col_h_sp1, col_h_sp2 = st.columns(2)
             
             with col_h_sp1:
-                fav_label = f"{recommended_team} ({safe_spread:+.1f})"
+                fav_label = f"{fav_team} ({fav_safe_spread:+.1f})"
                 if st.button(f"➕ Zapisz Faworyta: {fav_label}", key="save_fav_spread"):
                     save_bet(
                         datetime.now().strftime("%Y-%m-%d"), 
