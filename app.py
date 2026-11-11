@@ -271,7 +271,7 @@ def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący" or b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący" or b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -307,7 +307,6 @@ def auto_settle_from_odds_api(api_key):
                                (a_team.lower() in match_str.lower() or a_team.split()[-1].lower() in match_str.lower()):
                                 
                                 pick = bet.get("pick", "")
-                                # Rozstrzyganie handicapów / spreadów
                                 if "(" in pick and ")" in pick:
                                     try:
                                         team_part = pick.split("(")[0].strip()
@@ -442,7 +441,7 @@ def get_xgb_modifier():
         ]
         if len(settled_moneyline) >= 10:
             X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
+            y_train = np.array([1 if b.get("status"] == "Wygrany" else 0 for b in settled_moneyline])
             
             xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=30)
             xgb_model.fit(X_train, y_train)
@@ -733,8 +732,20 @@ with tab1:
 
         safe_spread = round(safe_spread * 2) / 2
 
+        # USTALENIE KIM JEST RECOMMENDOWANA DRUŻYNA (FAWORYT CZY OUTSIDER)
+        # Jeśli różnica jest na korzyść gospodarza, to gość jest outsiderem i na odwrót
+        if raw_diff > 0:
+            fav_team = matched_home
+            dog_team = matched_away
+            dog_safe_spread = round((raw_diff + safety_buffer) * 2) / 2
+        else:
+            fav_team = matched_away
+            dog_team = matched_home
+            dog_safe_spread = round((abs(raw_diff) + safety_buffer) * 2) / 2
+
         st.write(f"• **Przewidywana przewaga modelu:** `{model_margin:.1f} pkt` dla **{recommended_team}**")
-        st.write(f"• **Sugerowany bezpieczny bufor handicapu:** **{recommended_team} ({safe_spread:+.1f})**")
+        st.write(f"• **Sugerowany bezpieczny bufor dla Faworyta ({recommended_team}):** `{safe_spread:+.1f}`")
+        st.write(f"• **Sugerowany bezpieczny bufor dla Outsidera ({dog_team}):** **`{dog_team} (+{dog_safe_spread})`**")
 
         if spread_bookie_line != 0.0:
             if spread_team == recommended_team:
@@ -742,24 +753,34 @@ with tab1:
             else:
                 bookie_team_spread = -spread_bookie_line
 
-            st.write(f"• **Aktualna linia bukmachera:** `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)")
+            st.write(f"• **Aktualna linia bukmachera dla {recommended_team}:** `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)")
             
-            if bookie_team_spread > safe_spread:
-                st.success(f"✅ **REKOMENDACJA:** Linia bukmachera oferuje bezpieczny zapas punktowy dla **{recommended_team}**!")
-            else:
-                st.info("ℹ️ Linia bukmachera jest ciasna - zachowaj ostrożność.")
+            # NAPRAWIONY PRZYCISK ZAPISU - TERAZ W PEŁNI ROZPOZNAJE I DAJE WYBÓR FLAWORYTA LUB OUTSIDERA
+            col_h_sp1, col_h_sp2 = st.columns(2)
+            
+            with col_h_sp1:
+                fav_label = f"{recommended_team} ({safe_spread:+.1f})"
+                if st.button(f"➕ Zapisz Faworyta: {fav_label}", key="save_fav_spread"):
+                    save_bet(
+                        datetime.now().strftime("%Y-%m-%d"), 
+                        f"{matched_away} @ {matched_home}", 
+                        fav_label, 
+                        spread_bookie_odds
+                    )
+                    st.success(f"Zapisano handicap faworyta: {fav_label}")
+                    st.rerun()
 
-            # Fizyczny przycisk zapisu handicapu do Supabase + automatyczne rozliczanie
-            pick_label = f"{recommended_team} ({bookie_team_spread:+.1f})"
-            if st.button(f"➕ Zapisz typ z handicapem: {pick_label}", key="save_spread_btn"):
-                save_bet(
-                    datetime.now().strftime("%Y-%m-%d"), 
-                    f"{matched_away} @ {matched_home}", 
-                    pick_label, 
-                    spread_bookie_odds
-                )
-                st.success(f"Zapisano handicap {pick_label} w chmurze Supabase!")
-                st.rerun()
+            with col_h_sp2:
+                dog_label = f"{dog_team} (+{dog_safe_spread})"
+                if st.button(f"➕ Zapisz Outsidera: {dog_label}", key="save_dog_spread"):
+                    save_bet(
+                        datetime.now().strftime("%Y-%m-%d"), 
+                        f"{matched_away} @ {matched_home}", 
+                        dog_label, 
+                        spread_bookie_odds
+                    )
+                    st.success(f"Zapisano bezpieczny handicap outsidera: {dog_label}")
+                    st.rerun()
         else:
             st.info("Brak dostępnych rynków Spread (Handicap) u bukmachera dla tego meczu.")
 
