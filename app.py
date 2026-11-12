@@ -6,8 +6,6 @@ import requests
 import streamlit as st
 from supabase import create_client, Client
 import altair as alt
-
-import xgboost as xgb
 import numpy as np
 
 st.set_page_config(
@@ -171,7 +169,7 @@ def load_bets():
     try:
         response = supabase.table("bets").select("*").order("id", desc=False).execute()
         return response.data
-    except Exception as e:
+    except Exception:
         return []
 
 def save_bet(date, match, pick, odds):
@@ -231,7 +229,7 @@ def save_model_weights(weights_dict):
             for team_name, vals in weights_dict.items()
         ]
         supabase.table("model_weights").upsert(payload, on_conflict="team_name").execute()
-    except Exception as e:
+    except Exception:
         pass
 
 @st.cache_data(ttl=43200, show_spinner=False)
@@ -440,28 +438,6 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_xgb_modifier():
-    try:
-        bets = load_bets()
-        settled_moneyline = [
-            b for b in bets 
-            if b.get("status") in ["Wygrany", "Przegrany"] 
-            and not ("Over" in b.get("pick", "") or "Under" in b.get("pick", ""))
-        ]
-        if len(settled_moneyline) >= 10:
-            X_train = np.array([[b.get("odds", 1.9)] for b in settled_moneyline])
-            y_train = np.array([1 if b.get("status") == "Wygrany" else 0 for b in settled_moneyline])
-            
-            xgb_model = xgb.XGBClassifier(eval_metric='logloss', random_state=42, n_estimators=30)
-            xgb_model.fit(X_train, y_train)
-            
-            pred_prob = xgb_model.predict_proba([[1.9]])[0][1]
-            return (pred_prob - 0.5) * 0.1
-    except Exception:
-        pass
-    return 0.0
-
 def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0.0):
     h_off = max(80.0, home_team.get("AVG_PTS_FOR") - home_injury_adj)
     h_def = home_team.get("AVG_PTS_AGAINST")
@@ -500,10 +476,7 @@ def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0
     expected_total_pts = base_total + 4.8
 
     expected_diff = expected_home_pts - expected_away_pts
-    base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
-    
-    ml_boost = get_xgb_modifier()
-    prob_home = max(0.12, min(0.88, base_prob_home + ml_boost))
+    prob_home = max(0.12, min(0.88, 1 / (1 + 10 ** (-expected_diff / 16.0))))
     prob_away = 1 - prob_home
     handicap = -round(expected_diff * 2) / 2
 
@@ -541,7 +514,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Detektor Upsetów + Handicapy)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Czysta Matematyka + Detektor Upsetów + Profilowanie Behawioralne)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -556,7 +529,7 @@ if st.sidebar.button("🔄 Rozlicz zaległe mecze (The Odds API)"):
     st.sidebar.success("Zakończono rozliczanie!")
     st.rerun()
 
-st.sidebar.success("🟢 System (XGBoost + Supabase + Detektor Upsetów) Aktywny")
+st.sidebar.success("🟢 System (Czysta Matematyka + Supabase + Detektor Upsetów) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -570,7 +543,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
     "🎯 Terminal Analityczny & ROI",
-    "🧠 Stan Samouczenia Modelu (XGBoost)",
+    "🧠 Profiler Behawioralny i Wzorce",
 ])
 
 with tab1:
@@ -703,8 +676,8 @@ with tab1:
 
         if len(upset_reasons) >= 2:
             st.markdown(
-                f"<div class='warning-box'>🔥 AUTOMATYCZNY DETEKTOR UPSETÓW: Wysokie prawdopodobieństwo niespodzianki lub zykowej końcówki!<br>" +
-                "".join([f"• {r}<br>" for r in upset_reasons]) + "<b>Zalecenie:</b> Odrzuć czyste ML faworyta i wybierz bezpieczny handicap dodatni na underdoga ({dog}).</div>",
+                f"<div class='warning-box'>🔥 AUTOMATYCZNY DETEKTOR UPSETÓW: Wysokie prawdopodobieństwo niespodzianki lub zyskowej końcówki!<br>" +
+                "".join([f"• {r}<br>" for r in upset_reasons]) + f"<b>Zalecenie:</b> Odrzuć czyste ML faworyta i wybierz bezpieczny handicap dodatni na underdoga ({dog}).</div>",
                 unsafe_allow_html=True
             )
 
@@ -926,77 +899,16 @@ with tab3:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # --- PODZIAŁ STATYSTYK NA KATEGORIE (ML vs Handicupy) ---
+            # --- WYKRES LINIOWY AKUMULACJI KAPITAŁU ---
             st.markdown("---")
-            st.subheader("🎯 Skuteczność według Typu Zakładu")
-            
-            ml_bets = [b for b in settled_sorted if "(" not in b.get("pick", "") and ")" not in b.get("pick", "")]
-            spread_bets = [b for b in settled_sorted if "(" in b.get("pick", "") and ")" in b.get("pick", "")]
-
-            def calc_cat_stats(cat_list):
-                if not cat_list:
-                    return 0, 0, 0.0
-                c_won = len([b for b in cat_list if b.get("status") == "Wygrany"])
-                c_total = len(cat_list)
-                c_wr = (c_won / c_total) * 100
-                c_ret = sum([b.get("odds", 1.9) for b in cat_list if b.get("status") == "Wygrany"])
-                c_profit = c_ret - c_total
-                return c_won, c_total, c_profit
-
-            ml_won, ml_tot, ml_prof = calc_cat_stats(ml_bets)
-            sp_won, sp_tot, sp_prof = calc_cat_stats(spread_bets)
-
-            col_cat1, col_cat2 = st.columns(2)
-            with col_cat1:
-                st.metric("Zakłady ML (Zwycięstwa)", f"{ml_won}/{ml_tot} ({ml_won/ml_tot*100 if ml_tot>0 else 0:.1f}%)", f"{ml_prof:+.2f} PLN")
-            with col_cat2:
-                st.metric("Zakłady Spread (Handicupy)", f"{sp_won}/{sp_tot} ({sp_won/sp_tot*100 if sp_tot>0 else 0:.1f}%)", f"{sp_prof:+.2f} PLN")
-
-            # --- TABELA: NAJBARDZIEJ ZYSKOWNE / STRATNE DRUŻYNY ---
-            st.markdown("---")
-            st.subheader("🏆 Bilans Zysków według Drużyn")
-            team_stats = {}
-            for b in settled_sorted:
-                pick = b.get("pick", "")
-                status = b.get("status", "")
-                odds = float(b.get("odds", 1.9))
-                
-                team_name = pick.split("(")[0].strip() if "(" in pick else pick
-                
-                if team_name not in team_stats:
-                    team_stats[team_name] = {"zaksy": 0, "wygrane": 0, "zysk": 0.0}
-                
-                team_stats[team_name]["zaksy"] += 1
-                if status == "Wygrany":
-                    team_stats[team_name]["wygrane"] += 1
-                    team_stats[team_name]["zysk"] += (odds - 1.0) * 10.0
-                else:
-                    team_stats[team_name]["zysk"] -= 10.0
-
-            team_list = []
-            for t_name, t_vals in team_stats.items():
-                wr_team = (t_vals["wygrane"] / t_vals["zaksy"]) * 100 if t_vals["zaksy"] > 0 else 0.0
-                team_list.append({
-                    "Drużyna": t_name,
-                    "Liczba typów": t_vals["zaksy"],
-                    "Skuteczność": f"{wr_team:.1f}%",
-                    "Zysk (PLN)": round(t_vals["zysk"], 2)
-                })
-            
-            if team_list:
-                df_teams = pd.DataFrame(team_list)
-                df_teams = df_teams.sort_values(by="Zysk (PLN)", ascending=False).reset_index(drop=True)
-                st.dataframe(df_teams, use_container_width=True, hide_index=True)
-
-            # --- WYKRES KAPITAŁU ---
-            st.markdown("---")
-            st.subheader("📈 Krzywa Kapitału")
+            st.subheader("📈 Krzywa Akumulacji Kapitału w Czasie")
             chart_data = []
             current_capital = bankroll
             
             chart_data.append({
-                "Liczba rozliczonych zakładów": 0,
-                "Kapitał (PLN)": round(current_capital, 2)
+                "Zakład #": 0,
+                "Kapitał (PLN)": round(current_capital, 2),
+                "Data": "Początek"
             })
 
             for i, b in enumerate(settled_sorted):
@@ -1008,8 +920,9 @@ with tab3:
                     current_capital -= unit_stake
 
                 chart_data.append({
-                    "Liczba rozliczonych zakładów": i + 1,
-                    "Kapitał (PLN)": round(current_capital, 2)
+                    "Zakład #": i + 1,
+                    "Kapitał (PLN)": round(current_capital, 2),
+                    "Data": b.get("date", "")
                 })
 
             df_chart = pd.DataFrame(chart_data)
@@ -1019,17 +932,18 @@ with tab3:
                 strokeWidth=3,
                 interpolate='monotone'
             ).encode(
-                x=alt.X('Liczba rozliczonych zakładów:Q', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
-                y=alt.Y('Kapitał (PLN):Q', scale=alt.Scale(zero=False), axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
-                tooltip=['Liczba rozliczonych zakładów', 'Kapitał (PLN)']
+                x=alt.X('Zakład #:Q', title='Liczba rozliczonych zakładów', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
+                y=alt.Y('Kapitał (PLN):Q', scale=alt.Scale(zero=False), title='Kapitał (PLN)', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
+                tooltip=['Zakład #', 'Data', 'Kapitał (PLN)']
             )
 
             points = alt.Chart(df_chart).mark_circle(
                 color='#00E676',
-                size=40
+                size=50
             ).encode(
-                x='Liczba rozliczonych zakładów:Q',
-                y='Kapitał (PLN):Q'
+                x='Zakład #:Q',
+                y='Kapitał (PLN):Q',
+                tooltip=['Zakład #', 'Data', 'Kapitał (PLN)']
             )
 
             chart_combined = (line + points).properties(
@@ -1050,20 +964,90 @@ with tab3:
             st.rerun()
 
 with tab4:
-    st.subheader("🧠 Stan Samouczenia Modelu (XGBoost Classifier)")
-    st.info("🤖 Potężny silnik XGBoost analizuje Twoje zebrane typy w Supabase i optymalizuje predykcje.")
+    st.subheader("🧠 Profiler Behawioralny i Wzorce Rynkowe")
+    st.info("🔍 Modulet analiza behawioralna skanuje Twoje zakłady w Supabase pod kątem skuteczności w zależności od przedziałów kursowych oraz typu zakładu.")
     
-    error_logs_data = load_model_weights()
-    if not error_logs_data:
-        st.info("Model nie wprowadził jeszcze żadnych korekt. Wagi dla wszystkich drużyn wynoszą obecnie 0.0.")
+    bets_all = load_bets()
+    settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
+
+    if not settled_all:
+        st.info("Brak rozliczonych zakładów do analizy behawioralnej.")
     else:
-        weights_list = []
-        for team, vals in error_logs_data.items():
-            weights_list.append({
-                "Drużyna": team,
-                "Korekta Ofensywna (OFF_CORR)": vals.get("off_corr", 0.0),
-                "Korekta Defensywna (DEF_CORR)": vals.get("def_corr", 0.0)
-            })
-        df_weights = pd.DataFrame(weights_list)
-        df_weights = df_weights.sort_values(by="Drużyna").reset_index(drop=True)
-        st.dataframe(df_weights, use_container_width=True, hide_index=True)
+        # --- ANALIZA SKUTECZNOŚCI W ZALEŻNOŚCI OD WYSOKOŚCI KURSU (WYKRES LINIOWY) ---
+        st.markdown("### 📊 Skuteczność (Win Rate %) w Zależności od Wysokości Kursu")
+        
+        # Tworzymy przedziały kursowe
+        bins = [1.0, 1.40, 1.60, 1.90, 2.30, 3.00, 10.0]
+        labels = ["1.00-1.40", "1.41-1.60", "1.61-1.90", "1.91-2.30", "2.31-3.00", "3.00+"]
+        
+        df_beh = pd.DataFrame(settled_all)
+        df_beh['odds_float'] = df_beh['odds'].astype(float)
+        df_beh['is_won'] = df_beh['status'].apply(lambda x: 1 if x == "Wygrany" else 0)
+        df_beh['bin'] = pd.cut(df_beh['odds_float'], bins=bins, labels=labels, right=True)
+
+        bin_stats = []
+        for label in labels:
+            sub = df_beh[df_beh['bin'] == label]
+            total_count = len(sub)
+            if total_count > 0:
+                win_count = sub['is_won'].sum()
+                wr = (win_count / total_count) * 100
+                bin_stats.append({
+                    "Przedział kursowy": label,
+                    "Skuteczność (%)": round(wr, 1),
+                    "Liczba zakładów": total_count
+                })
+            else:
+                bin_stats.append({
+                    "Przedział kursowy": label,
+                    "Skuteczność (%)": 0.0,
+                    "Liczba zakładów": 0
+                })
+
+        df_bins = pd.DataFrame(bin_stats)
+
+        # Wykres liniowy efektywności kursów
+        line_odds = alt.Chart(df_bins).mark_line(
+            color='#58a6ff',
+            strokeWidth=3,
+            point=True,
+            interpolate='monotone'
+        ).encode(
+            x=alt.X('Przedział kursowy:N', title='Przedział Kursowy', axis=alt.Axis(labelAngle=0, titleColor='#8b949e')),
+            y=alt.Y('Skuteczność (%):Q', scale=alt.Scale(domain=[0, 100]), title='Skuteczność (Win Rate %)', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
+            tooltip=['Przedział kursowy', 'Skuteczność (%)', 'Liczba zakładów']
+        ).properties(
+            height=350
+        ).configure_view(
+            strokeWidth=0,
+            fill='#0d1117'
+        )
+
+        st.altair_chart(line_odds, use_container_width=True)
+        st.caption("💡 Wykres liniowy pokazuje, w którym przedziale kursowym osiągasz najwyższą skuteczność, a gdzie rynek generuje straty.")
+
+        # --- PODZIAŁ ML vs SPREAD ---
+        st.markdown("---")
+        st.subheader("🎯 Porównanie strategii: Czyste Zwycięstwa (ML) vs Handicupy (Spread)")
+        
+        ml_group = [b for b in settled_all if "(" not in str(b.get("pick", "")) and ")" not in str(b.get("pick", ""))]
+        sp_group = [b for b in settled_all if "(" in str(b.get("pick", "")) and ")" in str(b.get("pick", ""))]
+
+        def get_summary_metrics(items):
+            if not items:
+                return 0, 0, 0.0, 0.0
+            w = len([x for x in items if x.get("status") == "Wygrany"])
+            t = len(items)
+            wr = (w / t) * 100
+            ret = sum([float(x.get("odds", 1.9)) for x in items if x.get("status") == "Wygrany"])
+            roi = ((ret - t) / t) * 100
+            return w, t, wr, roi
+
+            ml_w, ml_t, ml_wr, ml_roi = get_summary_metrics(ml_group)
+            sp_w, sp_t, sp_wr, sp_roi = get_summary_metrics(sp_group)
+
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+            st.metric("Skuteczność ML (Czyste Zwycięstwa)", f"{ml_wr:.1f}% ({ml_w}/{ml_t})", f"ROI: {ml_roi:+.1f}%")
+        with col_p2:
+            st.metric("Skuteczność Spread (Handicupy z buforem)", f"{sp_wr:.1f}% ({sp_w}/{sp_t})", f"ROI: {sp_roi:+.1f}%")
