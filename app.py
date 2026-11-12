@@ -968,7 +968,7 @@ with tab4:
     st.info("🎯 Instrukcja dla Ciebie: Ten terminal analizuje Twoją historię w Supabase, wskazując najskuteczniejsze przedziały kursowe, typy oraz pułapki, których powinieneś unikać.")
     
     bets_all = load_bets()
-    settled_all = [b for b in bets_all if b.get("status"] != "Oczekujący"]
+    settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
 
     if not settled_all:
         st.warning("⚠️ Brak rozliczonych zakładów w bazie Supabase. Im więcej typów rozliczysz, tym mądrzejsze podpowiedzi da Ci ten doradca.")
