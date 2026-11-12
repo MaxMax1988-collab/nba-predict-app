@@ -968,7 +968,7 @@ with tab4:
     st.info("🔬 Moduł głębokiej analityki: wykrywanie ukrytych wzorców, pułapek kursowych i behawioralnych nawyków typowania.")
     
     bets_all = load_bets()
-    settled_all = [b for b in bets_all if b.get("status"] != "Oczekujący"]
+    settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
 
     if not settled_all:
         st.warning("⚠️ Brak rozliczonych zakładów w bazie Supabase do przeprowadzenia analizy zależności.")
