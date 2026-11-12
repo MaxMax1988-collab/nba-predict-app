@@ -908,7 +908,7 @@ with tab3:
                 c_won = len([b for b in cat_list if b.get("status") == "Wygrany"])
                 c_total = len(cat_list)
                 c_wr = (c_won / c_total) * 100
-                c_ret = sum([b.get("odds", 1.9) for b in cat_list if b.get("status"] == "Wygrany"])
+                c_ret = sum([b.get("odds", 1.9) for b in cat_list if b.get("status") == "Wygrany"])
                 c_profit = c_ret - c_total
                 return c_won, c_total, c_profit
 
