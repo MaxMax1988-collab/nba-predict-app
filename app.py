@@ -845,7 +845,7 @@ with tab3:
 
             # --- AUTOMATYCZNY ALERT TRENDU (HAMULEC BEZPIECZEŃSTWA) ---
             recent_10 = settled_sorted[-10:]
-            recent_won = [b for b in recent_10 if b.get("status"] == "Wygrany"]
+            recent_won = [b for b in recent_10 if b.get("status") == "Wygrany"]
             recent_wr = (len(recent_won) / len(recent_10)) * 100 if recent_10 else 0.0
 
             if len(recent_10) >= 5 and recent_wr < 40.0:
