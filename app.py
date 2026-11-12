@@ -964,56 +964,109 @@ with tab3:
             st.rerun()
 
 with tab4:
-    st.subheader("🧠 Profiler Behawioralny i Wzorce Rynkowe")
-    st.info("🔍 Moduł analizy behawioralnej skanuje Twoje zakłady w Supabase pod kątem skuteczności w zależności od przedziałów kursowych oraz typu zakładu.")
+    st.subheader("🧠 Doradca Decyzyjny & Analiza Skuteczności Typów")
+    st.info("🎯 Instrukcja dla Ciebie: Ten terminal analizuje Twoją historię w Supabase, wskazując najskuteczniejsze przedziały kursowe, typy oraz pułapki, których powinieneś unikać.")
     
     bets_all = load_bets()
-    settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
+    settled_all = [b for b in bets_all if b.get("status"] != "Oczekujący"]
 
     if not settled_all:
-        st.info("Brak rozliczonych zakładów do analizy behawioralnej.")
+        st.warning("⚠️ Brak rozliczonych zakładów w bazie Supabase. Im więcej typów rozliczysz, tym mądrzejsze podpowiedzi da Ci ten doradca.")
     else:
-        # --- ANALIZA SKUTECZNOŚCI W ZALEŻNOŚCI OD WYSOKOŚCI KURSU (WYKRES LINIOWY) ---
-        st.markdown("### 📊 Skuteczność (Win Rate %) w Zależności od Wysokości Kursu")
-        
-        bins = [1.0, 1.40, 1.60, 1.90, 2.30, 3.00, 10.0]
-        labels = ["1.00-1.40", "1.41-1.60", "1.61-1.90", "1.91-2.30", "2.31-3.00", "3.00+"]
-        
-        df_beh = pd.DataFrame(settled_all)
-        df_beh['odds_float'] = df_beh['odds'].astype(float)
-        df_beh['is_won'] = df_beh['status'].apply(lambda x: 1 if x == "Wygrany" else 0)
-        df_beh['bin'] = pd.cut(df_beh['odds_float'], bins=bins, labels=labels, right=True)
+        df_dec = pd.DataFrame(settled_all)
+        df_dec['odds_float'] = df_dec['odds'].astype(float)
+        df_dec['is_won'] = df_dec['status'].apply(lambda x: 1 if x == "Wygrany" else 0)
 
+        # --- 1. GŁÓWNE WSKAŹNIKI DECYZYJNE ---
+        total_settled = len(settled_all)
+        total_won = df_dec['is_won'].sum()
+        overall_wr = (total_won / total_settled) * 100 if total_settled > 0 else 0.0
+
+        c_d1, c_d2, c_d3 = st.columns(3)
+        with c_d1:
+            wr_badge = "metric-badge-green" if overall_wr >= 50.0 else "metric-badge-red"
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Ogólna Skuteczność</div>
+                <div class="metric-value">{overall_wr:.1f}%</div>
+                <div class="{wr_badge}">Trafione: {total_won}/{total_settled}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c_d2:
+            # Szukamy najlepszego przedziału kursowego
+            bins = [1.0, 1.40, 1.60, 1.90, 2.30, 3.00, 15.0]
+            labels = ["1.00-1.40", "1.41-1.60", "1.61-1.90", "1.91-2.30", "2.31-3.00", "3.00+"]
+            df_dec['bin'] = pd.cut(df_dec['odds_float'], bins=bins, labels=labels, right=True)
+            
+            best_bin, best_bin_wr = "Brak danych", 0.0
+            for lbl in labels:
+                sub_b = df_dec[df_dec['bin'] == lbl]
+                if len(sub_b) >= 3:
+                    wr_b = (sub_b['is_won'].sum() / len(sub_b)) * 100
+                    if wr_b > best_bin_wr:
+                        best_bin_wr = wr_b
+                        best_bin = lbl
+
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Twój "Złoty Korytarz" Kursów</div>
+                <div class="metric-value" style="font-size: 24px;">{best_bin}</div>
+                <div class="metric-badge-green">Skuteczność: {best_bin_wr:.1f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c_d3:
+            ml_sub = df_dec[~df_dec['pick'].astype(str).str.contains(r"\(|\)")]
+            sp_sub = df_dec[df_dec['pick'].astype(str).str.contains(r"\(|\)")]
+            
+            ml_wr_val = (ml_sub['is_won'].sum() / len(ml_sub) * 100) if len(ml_sub) > 0 else 0.0
+            sp_wr_val = (sp_sub['is_won'].sum() / len(sp_sub) * 100) if len(sp_sub) > 0 else 0.0
+            
+            better_strat = "Czyste Zwycięstwa (ML)" if ml_wr_val >= sp_wr_val else "Handicupy (Spread)"
+            better_val = max(ml_wr_val, sp_wr_val)
+
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Najskuteczniejszy Typ Zakładu</div>
+                <div class="metric-value" style="font-size: 20px;">{better_strat}</div>
+                <div class="metric-badge-green">Win Rate: {better_val:.1f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # --- 2. WYKRES LINIOWY SKUTECZNOŚCI W PRZEDZIAŁACH KURSOWYCH ---
+        st.markdown("---")
+        st.subheader("📈 Krzywa Skuteczności (Win Rate %) w Zależności od Wysokości Kursu")
+        
         bin_stats = []
         for label in labels:
-            sub = df_beh[df_beh['bin'] == label]
-            total_count = len(sub)
-            if total_count > 0:
-                win_count = sub['is_won'].sum()
-                wr = (win_count / total_count) * 100
+            sub = df_dec[df_dec['bin'] == label]
+            cnt = len(sub)
+            if cnt > 0:
+                wr = (sub['is_won'].sum() / cnt) * 100
                 bin_stats.append({
                     "Przedział kursowy": label,
                     "Skuteczność (%)": round(wr, 1),
-                    "Liczba zakładów": total_count
+                    "Liczba typów": cnt
                 })
             else:
                 bin_stats.append({
                     "Przedział kursowy": label,
                     "Skuteczność (%)": 0.0,
-                    "Liczba zakładów": 0
+                    "Liczba typów": 0
                 })
 
         df_bins = pd.DataFrame(bin_stats)
 
-        line_odds = alt.Chart(df_bins).mark_line(
-            color='#58a6ff',
+        line_wr = alt.Chart(df_bins).mark_line(
+            color='#00E676',
             strokeWidth=3,
             point=True,
             interpolate='monotone'
         ).encode(
             x=alt.X('Przedział kursowy:N', title='Przedział Kursowy', axis=alt.Axis(labelAngle=0, titleColor='#8b949e')),
             y=alt.Y('Skuteczność (%):Q', scale=alt.Scale(domain=[0, 100]), title='Skuteczność (Win Rate %)', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
-            tooltip=['Przedział kursowy', 'Skuteczność (%)', 'Liczba zakładów']
+            tooltip=['Przedział kursowy', 'Skuteczność (%)', 'Liczba typów']
         ).properties(
             height=350
         ).configure_view(
@@ -1021,33 +1074,36 @@ with tab4:
             fill='#0d1117'
         )
 
-        st.altair_chart(line_odds, use_container_width=True)
-        st.caption("💡 Wykres liniowy pokazuje, w którym przedziale kursowym osiągasz najwyższą skuteczność, a gdzie rynek generuje straty.")
+        st.altair_chart(line_wr, use_container_width=True)
+        st.caption("💡 Ta linia pokazuje dokładnie, na jakich kursach najczęściej trafiasz. Jeśli krzywa drastycznie spada powyżej 2.20, masz gotową wskazówkę: unikaj wysokich kursów.")
 
-        # --- PODZIAŁ ML vs SPREAD ---
+        # --- 3. AUTOMATYCZNE WSKAZÓWKI I REGUŁY DECYZYJNE ---
         st.markdown("---")
-        st.subheader("🎯 Porównanie strategii: Czyste Zwycięstwa (ML) vs Handicupy (Spread)")
+        st.subheader("💡 Automatyczny Doradca: Czego dzisiaj unikać, co stawiać?")
         
-        ml_group = [b for b in settled_all if "(" not in str(b.get("pick", "")) and ")" not in str(b.get("pick", ""))]
-        sp_group = [b for b in settled_all if "(" in str(b.get("pick", "")) and ")" in str(b.get("pick", ""))]
+        advice_list = []
+        
+        # Sprawdzamy regułę dla kursów niskich
+        low_odds = df_dec[df_dec['odds_float'] <= 1.50]
+        if len(low_odds) >= 5:
+            lw_wr = (low_odds['is_won'].sum() / len(low_odds)) * 100
+            if lw_wr >= 70.0:
+                advice_list.append(f"🟢 **Silny punkt:** Masz świetną skuteczność ({lw_wr:.1f}%) na niskich kursach (do 1.50). Warto szukać takich okazji.")
+            elif lw_wr < 50.0:
+                advice_list.append(f"⚠️ **Pułapka:** Twoja skuteczność na niskich kursach (do 1.50) wynosi tylko {lw_wr:.1f}%. Zbyt często faworyci zawodzą.")
 
-        def get_summary_metrics(items):
-            if not items:
-                return 0, 0, 0.0, 0.0
-            w = len([x for x in items if x.get("status") == "Wygrany"])
-            t = len(items)
-            wr = (w / t) * 100
-            ret = sum([float(x.get("odds", 1.9)) for x in items if x.get("status") == "Wygrany"])
-            roi = ((ret - t) / t) * 100
-            return w, t, wr, roi
+        # Sprawdzamy Handicupy vs ML
+        if len(ml_sub) >= 5 and len(sp_sub) >= 3:
+            if ml_wr_val > sp_wr_val + 15:
+                advice_list.append(f"🟢 **Wzorzec:** O wiele lepiej idą Ci czyste zwycięstwa (ML: {ml_wr_val:.1f}%) niż zabawa w handicupy ({sp_wr_val:.1f}%).")
+            elif sp_wr_val > ml_wr_val + 15:
+                advice_list.append(f"🟢 **Wzorzec:** Handicupy z buforem dają Ci znacznie lepsze rezultaty ({sp_wr_val:.1f}%) niż czyste zakłady.")
 
-        ml_w, ml_t, ml_wr, ml_roi = get_summary_metrics(ml_group)
-        sp_w, sp_t, sp_wr, sp_roi = get_summary_metrics(sp_group)
-
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            st.metric("Skuteczność ML (Czyste Zwycięstwa)", f"{ml_wr:.1f}% ({ml_w}/{ml_t})", f"ROI: {ml_roi:+.1f}%")
-        with col_p2:
-            st.metric("Skuteczność Spread (Handicupy z buforem)", f"{sp_wr:.1f}% ({sp_w}/{sp_t})", f"ROI: {sp_roi:+.1f}%")
+        if advice_list:
+            for adv in advice_list:
+                st.markdown(f"- {adv}")
+        else:
+            st.info("Zapisz i rozlicz więcej typów w bazie, aby doradca mógł wygenerować precyzyjne reguły behawioralne.")
+                
             
 
