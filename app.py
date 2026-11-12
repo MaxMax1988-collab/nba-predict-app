@@ -965,7 +965,7 @@ with tab3:
 
 with tab4:
     st.subheader("🧠 Profiler Behawioralny i Wzorce Rynkowe")
-    st.info("🔍 Modulet analiza behawioralna skanuje Twoje zakłady w Supabase pod kątem skuteczności w zależności od przedziałów kursowych oraz typu zakładu.")
+    st.info("🔍 Moduł analizy behawioralnej skanuje Twoje zakłady w Supabase pod kątem skuteczności w zależności od przedziałów kursowych oraz typu zakładu.")
     
     bets_all = load_bets()
     settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
@@ -976,7 +976,6 @@ with tab4:
         # --- ANALIZA SKUTECZNOŚCI W ZALEŻNOŚCI OD WYSOKOŚCI KURSU (WYKRES LINIOWY) ---
         st.markdown("### 📊 Skuteczność (Win Rate %) w Zależności od Wysokości Kursu")
         
-        # Tworzymy przedziały kursowe
         bins = [1.0, 1.40, 1.60, 1.90, 2.30, 3.00, 10.0]
         labels = ["1.00-1.40", "1.41-1.60", "1.61-1.90", "1.91-2.30", "2.31-3.00", "3.00+"]
         
@@ -1006,7 +1005,6 @@ with tab4:
 
         df_bins = pd.DataFrame(bin_stats)
 
-        # Wykres liniowy efektywności kursów
         line_odds = alt.Chart(df_bins).mark_line(
             color='#58a6ff',
             strokeWidth=3,
@@ -1043,11 +1041,13 @@ with tab4:
             roi = ((ret - t) / t) * 100
             return w, t, wr, roi
 
-            ml_w, ml_t, ml_wr, ml_roi = get_summary_metrics(ml_group)
-            sp_w, sp_t, sp_wr, sp_roi = get_summary_metrics(sp_group)
+        ml_w, ml_t, ml_wr, ml_roi = get_summary_metrics(ml_group)
+        sp_w, sp_t, sp_wr, sp_roi = get_summary_metrics(sp_group)
 
         col_p1, col_p2 = st.columns(2)
         with col_p1:
             st.metric("Skuteczność ML (Czyste Zwycięstwa)", f"{ml_wr:.1f}% ({ml_w}/{ml_t})", f"ROI: {ml_roi:+.1f}%")
         with col_p2:
             st.metric("Skuteczność Spread (Handicupy z buforem)", f"{sp_wr:.1f}% ({sp_w}/{sp_t})", f"ROI: {sp_roi:+.1f}%")
+            
+
