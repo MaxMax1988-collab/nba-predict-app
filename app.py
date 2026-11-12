@@ -280,7 +280,7 @@ def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
     if not pending_bets:
         return
 
