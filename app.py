@@ -71,6 +71,15 @@ st.markdown("""
         padding: 15px;
         margin-bottom: 15px;
     }
+    .warning-box {
+        background-color: rgba(248, 81, 73, 0.1);
+        border: 1px solid #f85149;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 15px;
+        color: #f85149;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -543,7 +552,7 @@ except Exception:
 tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
-    "🎯 Rejestr Typów & ROI",
+    "🎯 Terminal Analityczny & ROI",
     "🧠 Stan Samouczenia Modelu (XGBoost)",
 ])
 
@@ -633,6 +642,17 @@ with tab1:
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
+        # --- FILTR WYSOKIEGO RYZYKA (UNCERTAINTY FILTER) ---
+        total_injuries = home_inj_adj + away_inj_adj
+        is_high_risk = total_injuries > 6.0 or home_inj_adj > 4.0 or away_inj_adj > 4.0
+
+        if is_high_risk:
+            st.markdown(
+                f"<div class='warning-box'>⚠️ WYSOKIE RYZYKO: Wykryto duże absencje kadrowe (Suma kar: {total_injuries:.1f} pkt). "
+                f"Model odradza granie czystego zwycięstwa (ML) i zaleca skupienie się wyłącznie na szerokich handicapach dodatnich dla outsidera!</div>",
+                unsafe_allow_html=True
+            )
+
         res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away], home_inj_adj, away_inj_adj)
 
         st.markdown("---")
@@ -683,14 +703,16 @@ with tab1:
                 ev_h = (res.get("prob_home") * bookie_h_odds) - 1
                 kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
                 
-                if ev_h > 0 and 1.40 <= bookie_h_odds <= 2.80:
+                if is_high_risk:
+                    st.warning("⚠️ Typ zablokowany (Wysokie ryzyko kontuzji w meczu).")
+                elif ev_h > 0 and 1.40 <= bookie_h_odds <= 2.80:
                     st.success(f"✅ OPTYMALNY VALUE! EV: +{ev_h*100:.1f}% | Stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                 elif bookie_h_odds > 2.80:
                     st.warning(f"⚠️ Kurs powyżej 2.80 (poza złotym korytarzem zysku). Zalecamy ostrożność.")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_h*100:.1f}%")
 
-                if st.button("➕ Zapisz typ gospodarza", key="save_home_btn"):
+                if not is_high_risk and st.button("➕ Zapisz typ gospodarza", key="save_home_btn"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_home, bookie_h_odds)
                     st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
@@ -703,24 +725,26 @@ with tab1:
                 ev_a = (res.get("prob_away") * bookie_a_odds) - 1
                 kelly_stake_a = calculate_kelly_stake(bankroll, res.get("prob_away"), bookie_a_odds)
                 
-                if ev_a > 0 and 1.40 <= bookie_a_odds <= 2.80:
+                if is_high_risk:
+                    st.warning("⚠️ Typ zablokowany (Wysokie ryzyko kontuzji w meczu).")
+                elif ev_a > 0 and 1.40 <= bookie_a_odds <= 2.80:
                     st.success(f"✅ OPTYMALNY VALUE! EV: +{ev_a*100:.1f}% | Stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
                 elif bookie_a_odds > 2.80:
                     st.warning(f"⚠️ Kurs powyżej 2.80 (poza złotym korytarzem zysku). Zalecamy ostrożność.")
                 else:
                     st.error(f"❌ Brak Value. EV: {ev_a*100:.1f}%")
 
-                if st.button("➕ Zapisz typ gościa", key="save_away_btn"):
+                if not is_high_risk and st.button("➕ Zapisz typ gościa", key="save_away_btn"):
                     save_bet(datetime.now().strftime("%Y-%m-%d"), f"{matched_away} @ {matched_home}", matched_away, bookie_a_odds)
                     st.success("Zapisano automatycznie w chmurze Supabase!")
                     st.rerun()
 
         st.markdown("---")
-        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów (+Spread)")
-        st.info("💡 Zgodnie z nową strategią, przy kursach outsiderów lub wyższym ryzyku stosujemy dodatnie handicapy (np. Utah Jazz (+13.5) lub Portland (+7.5)).")
+        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów (+Spread z Buforem 2.5 pkt)")
+        st.info("💡 Aplikacja automatycznie aplikuje stały bufor bezpieczeństwa (2.5 pkt), aby chronić Twoje kupony przed porażką o włos.")
 
         raw_diff = res.get("expected_diff")
-        safety_buffer = 3.5
+        safety_buffer = 2.5
 
         if raw_diff > 0:
             recommended_team = matched_home
@@ -783,15 +807,33 @@ with tab2:
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("📊 Krzywa Kapitału na żywo (Equity Curve)")
+    st.subheader("🎯 Terminal Analityczny & Krzywa Kapitału")
     bets = load_bets()
     if not bets:
         st.info("Brak zapisanych typów w bazie chmurowej Supabase.")
     else:
         df_bets = pd.DataFrame(bets)
 
-        settled = [b for b in bets if b.get("status") != "Oczekujący"]
-        if settled:
+        # --- FILTR OKRESU ---
+        st.markdown("### ⏱️ Filtr Okresu Analitycznego")
+        time_filter = st.radio(
+            "Wybierz zakres analizy:",
+            ["Cały okres", "Ostatnie 14 dni", "Ostatnie 7 dni"],
+            horizontal=True,
+            key="time_filter_radio"
+        )
+
+        filtered_bets = bets
+        if time_filter == "Ostatnie 14 dni" or time_filter == "Ostatnie 7 dni":
+            days_limit = 14 if time_filter == "Ostatnie 14 dni" else 7
+            limit_date = (datetime.now() - timedelta(days=days_limit)).strftime("%Y-%m-%d")
+            filtered_bets = [b for b in bets if b.get("date", "") >= limit_date]
+
+        settled = [b for b in filtered_bets if b.get("status"] != "Oczekujący"]
+        
+        if not settled:
+            st.warning(f"Brak rozliczonych zakładów dla wybranego okresu: {time_filter}.")
+        else:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
             won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
@@ -801,13 +843,26 @@ with tab3:
             total_profit = total_returns - total_staked
             roi = ((total_returns - total_staked) / total_staked) * 100 if total_staked > 0 else 0.0
 
+            # --- AUTOMATYCZNY ALERT TRENDU (HAMULEC BEZPIECZEŃSTWA) ---
+            recent_10 = settled_sorted[-10:]
+            recent_won = [b for b in recent_10 if b.get("status"] == "Wygrany"]
+            recent_wr = (len(recent_won) / len(recent_10)) * 100 if recent_10 else 0.0
+
+            if len(recent_10) >= 5 and recent_wr < 40.0:
+                st.markdown(
+                    f"<div class='warning-box'>⚠️ ALERT TRENDU: Skuteczność z ostatnich {len(recent_10)} zakładów wynosi zaledwie {recent_wr:.1f}%. "
+                    f"Zalecana redukcja stawek lub skupienie się wyłącznie na bezpiecznych handicapach!</div>",
+                    unsafe_allow_html=True
+                )
+
+            # --- GŁÓWNE METRYKI ---
             c_m1, c_m2 = st.columns(2)
             with c_m1:
                 badge_class = "metric-badge-green" if total_profit >= 0 else "metric-badge-red"
                 sign = "+" if total_profit >= 0 else ""
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-title">Łączny Zysk (PLN)</div>
+                    <div class="metric-title">Łączny Zysk ({time_filter})</div>
                     <div class="metric-value">{sign}{total_profit:.2f} PLN</div>
                     <div class="{badge_class}">↑ {sign}{total_profit:.2f} PLN</div>
                 </div>
@@ -840,7 +895,71 @@ with tab3:
                 </div>
                 """, unsafe_allow_html=True)
 
+            # --- PODZIAŁ STATYSTYK NA KATEGORIE (ML vs Handicupy) ---
             st.markdown("---")
+            st.subheader("🎯 Skuteczność według Typu Zakładu")
+            
+            ml_bets = [b for b in settled_sorted if "(" not in b.get("pick", "") and ")" not in b.get("pick", "")]
+            spread_bets = [b for b in settled_sorted if "(" in b.get("pick", "") and ")" in b.get("pick", "")]
+
+            def calc_cat_stats(cat_list):
+                if not cat_list:
+                    return 0, 0, 0.0
+                c_won = len([b for b in cat_list if b.get("status") == "Wygrany"])
+                c_total = len(cat_list)
+                c_wr = (c_won / c_total) * 100
+                c_ret = sum([b.get("odds", 1.9) for b in cat_list if b.get("status"] == "Wygrany"])
+                c_profit = c_ret - c_total
+                return c_won, c_total, c_profit
+
+            ml_won, ml_tot, ml_prof = calc_cat_stats(ml_bets)
+            sp_won, sp_tot, sp_prof = calc_cat_stats(spread_bets)
+
+            col_cat1, col_cat2 = st.columns(2)
+            with col_cat1:
+                st.metric("Zakłady ML (Zwycięstwa)", f"{ml_won}/{ml_tot} ({ml_won/ml_tot*100 if ml_tot>0 else 0:.1f}%)", f"{ml_prof:+.2f} PLN")
+            with col_cat2:
+                st.metric("Zakłady Spread (Handicupy)", f"{sp_won}/{sp_tot} ({sp_won/sp_tot*100 if sp_tot>0 else 0:.1f}%)", f"{sp_prof:+.2f} PLN")
+
+            # --- TABELA: NAJBARDZIEJ ZYSKOWNE / STRATNE DRUŻYNY ---
+            st.markdown("---")
+            st.subheader("🏆 Bilans Zysków według Drużyn")
+            team_stats = {}
+            for b in settled_sorted:
+                pick = b.get("pick", "")
+                status = b.get("status", "")
+                odds = float(b.get("odds", 1.9))
+                
+                team_name = pick.split("(")[0].strip() if "(" in pick else pick
+                
+                if team_name not in team_stats:
+                    team_stats[team_name] = {"zaksy": 0, "wygrane": 0, "zysk": 0.0}
+                
+                team_stats[team_name]["zaksy"] += 1
+                if status == "Wygrany":
+                    team_stats[team_name]["wygrane"] += 1
+                    team_stats[team_name]["zysk"] += (odds - 1.0) * 10.0
+                else:
+                    team_stats[team_name]["zysk"] -= 10.0
+
+            team_list = []
+            for t_name, t_vals in team_stats.items():
+                wr_team = (t_vals["wygrane"] / t_vals["zaksy"]) * 100 if t_vals["zaksy"] > 0 else 0.0
+                team_list.append({
+                    "Drużyna": t_name,
+                    "Liczba typów": t_vals["zaksy"],
+                    "Skuteczność": f"{wr_team:.1f}%",
+                    "Zysk (PLN)": round(t_vals["zysk"], 2)
+                })
+            
+            if team_list:
+                df_teams = pd.DataFrame(team_list)
+                df_teams = df_teams.sort_values(by="Zysk (PLN)", ascending=False).reset_index(drop=True)
+                st.dataframe(df_teams, use_container_width=True, hide_index=True)
+
+            # --- WYKRES KAPITAŁU ---
+            st.markdown("---")
+            st.subheader("📈 Krzywa Kapitału")
             chart_data = []
             current_capital = bankroll
             
@@ -852,7 +971,7 @@ with tab3:
             for i, b in enumerate(settled_sorted):
                 odds_val = float(b.get("odds", 1.9))
                 unit_stake = 10.0
-                if b.get("status") == "Wygrany":
+                if b.get("status"] == "Wygrany":
                     current_capital += (odds_val - 1.0) * unit_stake
                 else:
                     current_capital -= unit_stake
