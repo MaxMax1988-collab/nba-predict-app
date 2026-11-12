@@ -280,7 +280,7 @@ def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -517,6 +517,23 @@ def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0
         "expected_diff": expected_diff,
     }
 
+def analyze_upset_potential(home_team_name, away_team_name, home_inj, away_inj, expected_diff, bookie_h_odds, bookie_a_odds):
+    reasons = []
+    is_home_fav = expected_diff > 0
+    fav_team = home_team_name if is_home_fav else away_team_name
+    dog_team = away_team_name if is_home_fav else home_team_name
+    fav_inj = home_inj if is_home_fav else away_inj
+    dog_odds = bookie_a_odds if is_home_fav else bookie_h_odds
+    
+    if fav_inj >= 2.5:
+        reasons.append(f"Faworyt ({fav_team}) jest mocno osłabiony absencjami (kara: {fav_inj} pkt).")
+    if abs(expected_diff) < 5.0:
+        reasons.append(f"Bardzo wyrównany mecz na papierze (różnica tylko {abs(expected_diff):.1f} pkt).")
+    if dog_odds >= 1.75:
+        reasons.append(f"Atrakcyjny, wysoki kurs na outsidera ({dog_team}): {dog_odds}.")
+        
+    return fav_team, dog_team, reasons
+
 def calculate_kelly_stake(bankroll, probability, odds):
     if odds <= 1.0:
         return 0.0
@@ -524,7 +541,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Korytarz Zysku + Handicapy)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (XGBoost + Detektor Upsetów + Handicapy)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -539,7 +556,7 @@ if st.sidebar.button("🔄 Rozlicz zaległe mecze (The Odds API)"):
     st.sidebar.success("Zakończono rozliczanie!")
     st.rerun()
 
-st.sidebar.success("🟢 System (XGBoost + Supabase + Handicapy) Aktywny")
+st.sidebar.success("🟢 System (XGBoost + Supabase + Detektor Upsetów) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -557,7 +574,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Moneyline w Korytarzu Zysku & Bezpieczne Handicapy)")
+    st.subheader("Nadchodzące mecze (Moneyline w Korytarzu Zysku & Detektor Upsetów)")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -655,20 +672,7 @@ with tab1:
 
         res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away], home_inj_adj, away_inj_adj)
 
-        st.markdown("---")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Skorygowany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
-        with c2:
-            st.metric("Szacowana Różnica", f"{res.get('expected_diff'):+.1f} pkt")
-        with c3:
-            st.metric(f"Szansa {matched_home} (ML)", f"{res.get('prob_home')*100:.1f}%")
-        with c4:
-            st.metric(f"Szansa {matched_away} (ML)", f"{res.get('prob_away')*100:.1f}%")
-
-        st.markdown("---")
-        st.subheader("🎯 Kalkulator Value Betów (Moneyline w Korytarzu Zysku) + Stawka Kelly'ego")
-
+        # Pobieramy kursy bukmacherskie do analizy upsetu
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
         spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
@@ -690,6 +694,33 @@ with tab1:
                                 spread_bookie_line = float(out.get("point", 0.0))
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
+
+        # --- AUTOMATYCZNY DETEKTOR UPSETÓW ---
+        fav, dog, upset_reasons = analyze_upset_potential(
+            matched_home, matched_away, home_inj_adj, away_inj_adj,
+            res.get('expected_diff'), bookie_h_odds, bookie_a_odds
+        )
+
+        if len(upset_reasons) >= 2:
+            st.markdown(
+                f"<div class='warning-box'>🔥 AUTOMATYCZNY DETEKTOR UPSETÓW: Wysokie prawdopodobieństwo niespodzianki lub zykowej końcówki!<br>" +
+                "".join([f"• {r}<br>" for r in upset_reasons]) + "<b>Zalecenie:</b> Odrzuć czyste ML faworyta i wybierz bezpieczny handicap dodatni na underdoga ({dog}).</div>",
+                unsafe_allow_html=True
+            )
+
+        st.markdown("---")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Skorygowany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
+        with c2:
+            st.metric("Szacowana Różnica", f"{res.get('expected_diff'):+.1f} pkt")
+        with c3:
+            st.metric(f"Szansa {matched_home} (ML)", f"{res.get('prob_home')*100:.1f}%")
+        with c4:
+            st.metric(f"Szansa {matched_away} (ML)", f"{res.get('prob_away')*100:.1f}%")
+
+        st.markdown("---")
+        st.subheader("🎯 Kalkulator Value Betów (Moneyline w Korytarzu Zysku) + Stawka Kelly'ego")
 
         fair_home = round(1 / res.get("prob_home"), 2)
         fair_away = round(1 / res.get("prob_away"), 2)
