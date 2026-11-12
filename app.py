@@ -278,7 +278,7 @@ def auto_settle_from_odds_api(api_key):
     if not api_key:
         return
     bets = load_bets()
-    pending_bets = [b for b in bets if b.get("status") == "Oczekujący"]
+    pending_bets = [b for b in bets if b.get("status"] == "Oczekujący"]
     if not pending_bets:
         return
 
@@ -438,52 +438,64 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-def predict_matchup(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0.0):
-    h_off = max(80.0, home_team.get("AVG_PTS_FOR") - home_injury_adj)
+# --- INTELIGENTNE KOREKTY ANALITYCZNE (B2B + BEHAWIOR) ---
+def get_user_team_modifier(team_name):
+    """Pobiera z Supabase Twoją historyczną skuteczność dla danej drużyny."""
+    try:
+        bets = load_bets()
+        settled = [b for b in bets if b.get("status") in ["Wygrany", "Przegrany"]]
+        if not settled:
+            return 0.0, 0
+        
+        team_bets = [
+            b for b in settled 
+            if team_name.lower() in str(b.get("pick", "")).lower() or 
+               team_name.split()[-1].lower() in str(b.get("pick", "")).lower()
+        ]
+        
+        if len(team_bets) < 3:
+            return 0.0, len(team_bets)
+            
+        wins = len([b for b in team_bets if b.get("status") == "Wygrany"])
+        wr = (wins / len(team_bets)) * 100
+        
+        if wr >= 70.0:
+            return 0.04, len(team_bets)
+        elif wr <= 40.0:
+            return -0.05, len(team_bets)
+    except:
+        pass
+    return 0.0, 0
+
+def predict_matchup_advanced(home_team, away_team, home_injury_adj=0.0, away_injury_adj=0.0, home_b2b=False, away_b2b=False):
+    b2b_home_penalty = 2.5 if home_b2b else 0.0
+    b2b_away_penalty = 2.5 if away_b2b else 0.0
+
+    h_off = max(80.0, home_team.get("AVG_PTS_FOR") - home_injury_adj - b2b_home_penalty)
     h_def = home_team.get("AVG_PTS_AGAINST")
-    a_off = max(80.0, away_team.get("AVG_PTS_FOR") - away_injury_adj)
+    a_off = max(80.0, away_team.get("AVG_PTS_FOR") - away_injury_adj - b2b_away_penalty)
     a_def = away_team.get("AVG_PTS_AGAINST")
-
-    league_avg_total = 224.0
-    combined_team_pace = (h_off + h_def + a_off + a_def) / 2.0
-    pace_delta = (combined_team_pace - league_avg_total) * 0.45
-
-    home_mismatch_bonus = max(0.0, (h_off - a_def) * 0.3)
-    away_mismatch_bonus = max(0.0, (a_off - h_def) * 0.3)
 
     net_diff = home_team.get("NET_RATING") - away_team.get("NET_RATING")
     power_diff = home_team.get("TOTAL_POWER") - away_team.get("TOTAL_POWER")
     home_advantage = 3.0
 
-    expected_home_pts = (
-        (h_off + a_def) / 2
-        + (net_diff / 5)
-        + (power_diff / 3)
-        + (home_advantage / 2)
-        + (pace_delta / 2)
-        + home_mismatch_bonus
-    )
-    expected_away_pts = (
-        (a_off + h_def) / 2
-        - (net_diff / 5)
-        - (power_diff / 3)
-        - (home_advantage / 2)
-        + (pace_delta / 2)
-        + away_mismatch_bonus
-    )
-
-    base_total = expected_home_pts + expected_away_pts
-    expected_total_pts = base_total + 4.8
+    expected_home_pts = (h_off + a_def) / 2 + (net_diff / 5) + (power_diff / 3) + (home_advantage / 2)
+    expected_away_pts = (a_off + h_def) / 2 - (net_diff / 5) - (power_diff / 3) - (home_advantage / 2)
 
     expected_diff = expected_home_pts - expected_away_pts
-    prob_home = max(0.12, min(0.88, 1 / (1 + 10 ** (-expected_diff / 16.0))))
+    base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
+    
+    h_mod, _ = get_user_team_modifier(home_team.get("TEAM_NAME", ""))
+    a_mod, _ = get_user_team_modifier(away_team.get("TEAM_NAME", ""))
+    
+    prob_home = max(0.12, min(0.88, base_prob_home + h_mod - a_mod))
     prob_away = 1 - prob_home
     handicap = -round(expected_diff * 2) / 2
 
     return {
         "home_pts": round(expected_home_pts, 1),
         "away_pts": round(expected_away_pts, 1),
-        "total_pts": round(expected_total_pts, 1),
         "prob_home": prob_home,
         "prob_away": prob_away,
         "handicap": handicap,
@@ -514,7 +526,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (Czysta Matematyka + Detektor Upsetów + Profilowanie Behawioralne)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Czysta Matematyka + Detektor Upsetów + Auto-Audyt)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -529,7 +541,7 @@ if st.sidebar.button("🔄 Rozlicz zaległe mecze (The Odds API)"):
     st.sidebar.success("Zakończono rozliczanie!")
     st.rerun()
 
-st.sidebar.success("🟢 System (Czysta Matematyka + Supabase + Detektor Upsetów) Aktywny")
+st.sidebar.success("🟢 System (Czysta Matematyka + Supabase + Auto-Audyt) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -543,11 +555,11 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
     "🎯 Terminal Analityczny & ROI",
-    "🧠 Profiler Behawioralny i Wzorce",
+    "🧠 Granularny Profiler Drużyn i Rynków",
 ])
 
 with tab1:
-    st.subheader("Nadchodzące mecze (Moneyline w Korytarzu Zysku & Detektor Upsetów)")
+    st.subheader("Nadchodzące mecze & Automatyczny Audyt Decyzyjny")
 
     if not live_odds_data:
         st.info("Brak meczów z Odds API. Wybierz drużyny ręcznie z bazy ESPN:")
@@ -560,7 +572,7 @@ with tab1:
                 manual_away = st.selectbox("Gość:", all_teams, index=1 if len(all_teams) > 1 else 0)
 
             if manual_home in teams_dict and manual_away in teams_dict:
-                res = predict_matchup(teams_dict[manual_home], teams_dict[manual_away])
+                res = predict_matchup_advanced(teams_dict[manual_home], teams_dict[manual_away])
                 st.markdown("---")
                 st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
     else:
@@ -610,29 +622,19 @@ with tab1:
         if matched_away not in teams_dict:
             matched_away = list(teams_dict.keys())[1]
 
-        # --- MANUALNY PANEL KALIBRACJI KONTUZJI ---
+        # --- PANEL SZYBKICH FLAG ANALITYCZNYCH (B2B + KONTUZJE) ---
         st.markdown("<div class='injury-box'>", unsafe_allow_html=True)
-        st.subheader("🏥 Kalibracja Absencji i Kontuzji (Przed zatwierdzeniem typu)")
-        st.caption("Ustaw wagę osłabienia punktowego w zależności od absencji zawodników w rotacji:")
+        st.subheader("⚙️ Automatyczne Czynniki Obciążeniowe (Match Context)")
 
-        col_inj1, col_inj2 = st.columns(2)
-        with col_inj1:
-            home_inj_adj = st.slider(
-                f"Kara punktowa dla {matched_home} (Gospodarz):",
-                min_value=0.0, max_value=8.0, value=0.0, step=0.5,
-                key="home_injury_slider",
-                help="Supergwiazda/Lider: 3.5 - 4.5 pkt | Kluczowy starter: 2.0 - 2.5 pkt | Szósty gracz: 1.0 - 1.5 pkt"
-            )
-        with col_inj2:
-            away_inj_adj = st.slider(
-                f"Kara punktowa dla {matched_away} (Gość):",
-                min_value=0.0, max_value=8.0, value=0.0, step=0.5,
-                key="away_injury_slider",
-                help="Supergwiazda/Lider: 3.5 - 4.5 pkt | Kluczowy starter: 2.0 - 2.5 pkt | Szósty gracz: 1.0 - 1.5 pkt"
-            )
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            home_b2b = st.checkbox(f"🚨 {matched_home} gra dzień po dniu (B2B)", value=False, help="Drugi mecz w 24h - spadek wydolności o 2.5 pkt.")
+            home_inj_adj = st.slider(f"Kara kontuzji: {matched_home}", 0.0, 8.0, 0.0, 0.5, key="h_inj")
+        with col_c2:
+            away_b2b = st.checkbox(f"🚨 {matched_away} gra dzień po dniu (B2B)", value=False, help="Drugi mecz w 24h - spadek wydolności o 2.5 pkt.")
+            away_inj_adj = st.slider(f"Kara kontuzji: {matched_away}", 0.0, 8.0, 0.0, 0.5, key="a_inj")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # --- FILTR WYSOKIEGO RYZYKA (UNCERTAINTY FILTER) ---
         total_injuries = home_inj_adj + away_inj_adj
         is_high_risk = total_injuries > 6.0 or home_inj_adj > 4.0 or away_inj_adj > 4.0
 
@@ -643,9 +645,22 @@ with tab1:
                 unsafe_allow_html=True
             )
 
-        res = predict_matchup(teams_dict[matched_home], teams_dict[matched_away], home_inj_adj, away_inj_adj)
+        if home_b2b or away_b2b:
+            st.markdown(f"<div class='warning-box'>⚠️ ZMĘCZENIE KALENDARZOWE (B2B): Model automatycznie skorygował potencjał punktowy zmęczonej drużyny.</div>", unsafe_allow_html=True)
 
-        # Pobieramy kursy bukmacherskie do analizy upsetu
+        h_mod, h_cnt = get_user_team_modifier(matched_home)
+        a_mod, a_cnt = get_user_team_modifier(matched_away)
+
+        if h_mod < 0:
+            st.markdown(f"<div class='warning-box'>🛡️ BLOKADA BEHAWIORALNA: Masz ujemną skuteczność historyczną na typy związane z {matched_home} ({h_cnt} rozliczonych zakładów). Model traktuje ten zespół jako podwyższone ryzyko.</div>", unsafe_allow_html=True)
+        elif h_mod > 0:
+            st.markdown(f"<div class='injury-box' style='border-color: #3fb950; color: #3fb950;'>🟢 SYGNALIZATOR ZYSKU: {matched_home} to Twój sprawdzony zespół (wysoki historyczny Win Rate).</div>", unsafe_allow_html=True)
+
+        res = predict_matchup_advanced(
+            teams_dict[matched_home], teams_dict[matched_away], 
+            home_inj_adj, away_inj_adj, home_b2b, away_b2b
+        )
+
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
         spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
@@ -668,7 +683,6 @@ with tab1:
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
 
-        # --- AUTOMATYCZNY DETEKTOR UPSETÓW ---
         fav, dog, upset_reasons = analyze_upset_potential(
             matched_home, matched_away, home_inj_adj, away_inj_adj,
             res.get('expected_diff'), bookie_h_odds, bookie_a_odds
@@ -818,7 +832,6 @@ with tab3:
     else:
         df_bets = pd.DataFrame(bets)
 
-        # --- FILTR OKRESU ---
         st.markdown("### ⏱️ Filtr Okresu Analitycznego")
         time_filter = st.radio(
             "Wybierz zakres analizy:",
@@ -840,14 +853,13 @@ with tab3:
         else:
             settled_sorted = sorted(settled, key=lambda x: (x.get("date", ""), x.get("id", 0)))
             
-            won = [b for b in settled_sorted if b.get("status") == "Wygrany"]
+            won = [b for b in settled_sorted if b.get("status"] == "Wygrany"]
             win_rate = (len(won) / len(settled_sorted)) * 100
             total_staked = len(settled_sorted)
             total_returns = sum([b.get("odds", 1.9) for b in won])
             total_profit = total_returns - total_staked
             roi = ((total_returns - total_staked) / total_staked) * 100 if total_staked > 0 else 0.0
 
-            # --- AUTOMATYCZNY ALERT TRENDU (HAMULEC BEZPIECZEŃSTWA) ---
             recent_10 = settled_sorted[-10:]
             recent_won = [b for b in recent_10 if b.get("status") == "Wygrany"]
             recent_wr = (len(recent_won) / len(recent_10)) * 100 if recent_10 else 0.0
@@ -859,7 +871,6 @@ with tab3:
                     unsafe_allow_html=True
                 )
 
-            # --- GŁÓWNE METRYKI ---
             c_m1, c_m2 = st.columns(2)
             with c_m1:
                 badge_class = "metric-badge-green" if total_profit >= 0 else "metric-badge-red"
@@ -899,7 +910,6 @@ with tab3:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # --- WYKRES LINIOWY AKUMULACJI KAPITAŁU ---
             st.markdown("---")
             st.subheader("📈 Krzywa Akumulacji Kapitału w Czasie")
             chart_data = []
@@ -977,14 +987,12 @@ with tab4:
         df_full['odds_float'] = df_full['odds'].astype(float)
         df_full['is_won'] = df_full['status'].apply(lambda x: 1 if x == "Wygrany" else 0)
 
-        # --- 1. RANKING NIEZAWODNOŚCI DRUŻYN (DETALICZNY) ---
         st.markdown("### 🏆 Ranking Niezawodności Drużyn (Team Reliability Index)")
-        st.caption("Dokładne zestawienie dla każdej drużyny występującej w Twoich typach: liczba zakładów, trafienia, skuteczność i bilans.")
+        st.caption("Dokładne zestawienie dla każdej drużyny występującej w Twoich typach: liczba zakładów, trafienia, skuteczność.")
 
         team_perf = {}
         for _, row in df_full.iterrows():
             pick = str(row.get('pick', ''))
-            # Wyciągamy czystą nazwę drużyny z typu (usuwamy nawiasy z handicapami)
             team_name = pick.split("(")[0].strip()
             
             if team_name not in team_perf:
@@ -1012,7 +1020,6 @@ with tab4:
         df_teams_rank = pd.DataFrame(team_rows).sort_values(by=["Skuteczność (%)", "Liczba typów"], ascending=[False, False]).reset_index(drop=True)
         st.dataframe(df_teams_rank, use_container_width=True, hide_index=True)
 
-        # --- 2. SZCZEGÓŁOWA MATRYCA RODZAJÓW ZAKŁADÓW (DOM / WYJAZD / ML / SPREAD) ---
         st.markdown("---")
         st.subheader("🎯 Dokładna Analiza Typów i Kontekstów (Dom vs Wyjazd)")
 
@@ -1053,7 +1060,6 @@ with tab4:
         df_cat_summary = pd.DataFrame(cat_rows).sort_values(by="Skuteczność (%)", ascending=False).reset_index(drop=True)
         st.dataframe(df_cat_summary, use_container_width=True, hide_index=True)
 
-        # --- 3. MIKROSKOPOWA ANALIZA PRZEDZIAŁÓW KURSOWYCH ---
         st.markdown("---")
         st.subheader("📊 Precyzyjny Rozkład Skuteczności w Wąskich Przedziałach Kursowych")
 
@@ -1084,7 +1090,6 @@ with tab4:
 
         df_micro = pd.DataFrame(micro_rows)
 
-        # Wykres liniowy w Altair pokazujący tę precyzyjną strukturę
         line_micro = alt.Chart(df_micro).mark_line(
             color='#00E676',
             strokeWidth=3,
@@ -1102,7 +1107,3 @@ with tab4:
         )
 
         st.altair_chart(line_micro, use_container_width=True)
-        
-                
-            
-
