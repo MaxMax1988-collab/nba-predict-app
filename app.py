@@ -829,7 +829,7 @@ with tab3:
             limit_date = (datetime.now() - timedelta(days=days_limit)).strftime("%Y-%m-%d")
             filtered_bets = [b for b in bets if b.get("date", "") >= limit_date]
 
-        settled = [b for b in filtered_bets if b.get("status"] != "Oczekujący"]
+        settled = [b for b in filtered_bets if b.get("status") != "Oczekujący"]
         
         if not settled:
             st.warning(f"Brak rozliczonych zakładów dla wybranego okresu: {time_filter}.")
