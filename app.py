@@ -81,7 +81,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-DEFAULT_API_KEY = "99664b27d26274c81d967d9d5962dfc2"
+DEFAULT_API_KEY = "c9feca2c719bae2236c1d94457d522fc"
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba"
 
 # --- INICJALIZACJA CHMURY SUPABASE ---
