@@ -440,7 +440,6 @@ def fetch_live_odds(api_key):
 
 # --- INTELIGENTNE KOREKTY ANALITYCZNE (B2B + BEHAWIOR) ---
 def get_user_team_modifier(team_name):
-    """Pobiera z Supabase Twoją historyczną skuteczność dla danej drużyny."""
     try:
         bets = load_bets()
         settled = [b for b in bets if b.get("status") in ["Wygrany", "Przegrany"]]
@@ -502,7 +501,7 @@ def predict_matchup_advanced(home_team, away_team, home_injury_adj=0.0, away_inj
         "expected_diff": expected_diff,
     }
 
-def analyze_upset_potential(home_team_name, away_team_name, home_inj, away_inj, expected_diff, bookie_h_odds, bookie_a_odds):
+def analyze_upset_potential(home_team_name, away_team_name, home_inj, away_inj, expected_diff, bookie_h_odds, bookie_a_odds, prob_home, prob_away):
     reasons = []
     is_home_fav = expected_diff > 0
     fav_team = home_team_name if is_home_fav else away_team_name
@@ -510,14 +509,23 @@ def analyze_upset_potential(home_team_name, away_team_name, home_inj, away_inj, 
     fav_inj = home_inj if is_home_fav else away_inj
     dog_odds = bookie_a_odds if is_home_fav else bookie_h_odds
     
+    # Obliczamy kurs sprawiedliwy dla underdoga
+    dog_prob = prob_away if is_home_fav else prob_home
+    fair_dog_odds = 1.0 / dog_prob if dog_prob > 0 else 99.0
+    
     if fav_inj >= 2.5:
         reasons.append(f"Faworyt ({fav_team}) jest mocno osłabiony absencjami (kara: {fav_inj} pkt).")
     if abs(expected_diff) < 5.0:
         reasons.append(f"Bardzo wyrównany mecz na papierze (różnica tylko {abs(expected_diff):.1f} pkt).")
-    if dog_odds >= 1.75:
-        reasons.append(f"Atrakcyjny, wysoki kurs na outsidera ({dog_team}): {dog_odds}.")
         
-    return fav_team, dog_team, reasons
+    # WERYFIKACJA +EV: Sprawdzamy czy kurs bukmachera na underdoga daje realne Value względem modelu
+    if dog_odds > 0:
+        if dog_odds > fair_dog_odds:
+            reasons.append(f"Wykryto +EV dla underdoga ({dog_team}): Kurs bukmachera ({dog_odds}) przewyższa sprawiedliwą wycenę modelu ({fair_dog_odds:.2f}).")
+        else:
+            reasons.append(f"⚠️ Uwaga: Kurs bukmachera na underdoga ({dog_team}) wynosi {dog_odds}, podczas gdy model wycenia go na {fair_dog_odds:.2f} (brak Value / zaniżony kurs).")
+            
+    return fav_team, dog_team, reasons, fair_dog_odds
 
 def calculate_kelly_stake(bankroll, probability, odds):
     if odds <= 1.0:
@@ -636,26 +644,7 @@ with tab1:
         st.markdown("</div>", unsafe_allow_html=True)
 
         total_injuries = home_inj_adj + away_inj_adj
-        is_high_risk = total_injuries > 6.0 or home_inj_adj > 4.0 or away_inj_adj > 4.0
-
-        if is_high_risk:
-            st.markdown(
-                f"<div class='warning-box'>⚠️ WYSOKIE RYZYKO: Wykryto duże absencje kadrowe (Suma kar: {total_injuries:.1f} pkt). "
-                f"Model odradza granie czystego zwycięstwa (ML) i zaleca skupienie się wyłącznie na szerokich handicapach dodatnich dla outsidera!</div>",
-                unsafe_allow_html=True
-            )
-
-        if home_b2b or away_b2b:
-            st.markdown(f"<div class='warning-box'>⚠️ ZMĘCZENIE KALENDARZOWE (B2B): Model automatycznie skorygował potencjał punktowy zmęczonej drużyny.</div>", unsafe_allow_html=True)
-
-        h_mod, h_cnt = get_user_team_modifier(matched_home)
-        a_mod, a_cnt = get_user_team_modifier(matched_away)
-
-        if h_mod < 0:
-            st.markdown(f"<div class='warning-box'>🛡️ BLOKADA BEHAWIORALNA: Masz ujemną skuteczność historyczną na typy związane z {matched_home} ({h_cnt} rozliczonych zakładów). Model traktuje ten zespół jako podwyższone ryzyko.</div>", unsafe_allow_html=True)
-        elif h_mod > 0:
-            st.markdown(f"<div class='injury-box' style='border-color: #3fb950; color: #3fb950;'>🟢 SYGNALIZATOR ZYSKU: {matched_home} to Twój sprawdzony zespół (wysoki historyczny Win Rate).</div>", unsafe_allow_html=True)
-
+        
         res = predict_matchup_advanced(
             teams_dict[matched_home], teams_dict[matched_away], 
             home_inj_adj, away_inj_adj, home_b2b, away_b2b
@@ -683,15 +672,36 @@ with tab1:
                                 spread_bookie_odds = float(out.get("price", 1.9))
                                 spread_team = matched_home
 
-        fav, dog, upset_reasons = analyze_upset_potential(
+        fav, dog, upset_reasons, fair_dog = analyze_upset_potential(
             matched_home, matched_away, home_inj_adj, away_inj_adj,
-            res.get('expected_diff'), bookie_h_odds, bookie_a_odds
+            res.get('expected_diff'), bookie_h_odds, bookie_a_odds, res.get('prob_home'), res.get('prob_away')
         )
 
-        if len(upset_reasons) >= 2:
+        # Inteligentna blokada: Blokujemy ML faworyta tylko wtedy, gdy szanse faworyta spadną poniżej 60% lub model przewiduje wyrównany pojedynek, a nie automatycznie przy samych suwakach
+        is_high_risk = (res.get('prob_home') < 0.60 and res.get('prob_home') > 0.40) and total_injuries > 4.0
+
+        if is_high_risk:
             st.markdown(
-                f"<div class='warning-box'>🔥 AUTOMATYCZNY DETEKTOR UPSETÓW: Wysokie prawdopodobieństwo niespodzianki lub zyskowej końcówki!<br>" +
-                "".join([f"• {r}<br>" for r in upset_reasons]) + f"<b>Zalecenie:</b> Odrzuć czyste ML faworyta i wybierz bezpieczny handicap dodatni na underdoga ({dog}).</div>",
+                f"<div class='warning-box'>⚠️ WYSOKIE RYZYKO / UPSET ALERT: Zbliżone szanse i duże absencje (Suma kar: {total_injuries:.1f} pkt). "
+                f"Model odradza granie czystego zwycięstwa (ML) i zaleca skupienie się wyłącznie na handicapach!</div>",
+                unsafe_allow_html=True
+            )
+
+        if home_b2b or away_b2b:
+            st.markdown(f"<div class='warning-box'>⚠️ ZMĘCZENIE KALENDARZOWE (B2B): Model automatycznie skorygował potencjał punktowy zmęczonej drużyny.</div>", unsafe_allow_html=True)
+
+        h_mod, h_cnt = get_user_team_modifier(matched_home)
+        a_mod, a_cnt = get_user_team_modifier(matched_away)
+
+        if h_mod < 0:
+            st.markdown(f"<div class='warning-box'>🛡️ BLOKADA BEHAWIORALNA: Masz ujemną skuteczność historyczną na typy związane z {matched_home} ({h_cnt} rozliczonych zakładów). Model traktuje ten zespół jako podwyższone ryzyko.</div>", unsafe_allow_html=True)
+        elif h_mod > 0:
+            st.markdown(f"<div class='injury-box' style='border-color: #3fb950; color: #3fb950;'>🟢 SYGNALIZATOR ZYSKU: {matched_home} to Twój sprawdzony zespół (wysoki historyczny Win Rate).</div>", unsafe_allow_html=True)
+
+        if len(upset_reasons) >= 2 and abs(res.get('expected_diff')) < 8.0:
+            st.markdown(
+                f"<div class='warning-box'>🔥 AUTOMATYCZNY DETEKTOR UPSETÓW: Wykryto potencjał niespodzianki!<br>" +
+                "".join([f"• {r}<br>" for r in upset_reasons]) + f"<b>Zalecenie:</b> Zweryfikuj kursy i rozważ handicap dodatni na underdoga ({dog}).</div>",
                 unsafe_allow_html=True
             )
 
@@ -722,7 +732,7 @@ with tab1:
                 kelly_stake_h = calculate_kelly_stake(bankroll, res.get("prob_home"), bookie_h_odds)
                 
                 if is_high_risk:
-                    st.warning("⚠️ Typ zablokowany (Wysokie ryzyko kontuzji w meczu).")
+                    st.warning("⚠️ Typ zablokowany (Wysokie ryzyko w meczu).")
                 elif ev_h > 0 and 1.40 <= bookie_h_odds <= 2.80:
                     st.success(f"✅ OPTYMALNY VALUE! EV: +{ev_h*100:.1f}% | Stawka (Kelly): **{kelly_stake_h:.2f} PLN**")
                 elif bookie_h_odds > 2.80:
@@ -744,7 +754,7 @@ with tab1:
                 kelly_stake_a = calculate_kelly_stake(bankroll, res.get("prob_away"), bookie_a_odds)
                 
                 if is_high_risk:
-                    st.warning("⚠️ Typ zablokowany (Wysokie ryzyko kontuzji w meczu).")
+                    st.warning("⚠️ Typ zablokowany (Wysokie ryzyko w meczu).")
                 elif ev_a > 0 and 1.40 <= bookie_a_odds <= 2.80:
                     st.success(f"✅ OPTYMALNY VALUE! EV: +{ev_a*100:.1f}% | Stawka (Kelly): **{kelly_stake_a:.2f} PLN**")
                 elif bookie_a_odds > 2.80:
@@ -912,6 +922,7 @@ with tab3:
 
             st.markdown("---")
             st.subheader("📈 Krzywa Akumulacji Kapitału w Czasie")
+            
             chart_data = []
             current_capital = bankroll
             
@@ -937,6 +948,7 @@ with tab3:
 
             df_chart = pd.DataFrame(chart_data)
 
+            # Pełne dynamiczne mapowanie osi X bez sztywnych limitów obcinających wykres
             line = alt.Chart(df_chart).mark_line(
                 color='#00E676',
                 strokeWidth=3,
@@ -978,7 +990,7 @@ with tab4:
     st.info("🔬 Pełny wgląd w detale: ranking niezawodności poszczególnych drużyn, skuteczność rynków oraz twarde dane bez uproszczeń.")
     
     bets_all = load_bets()
-    settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
+    settled_all = [b for b in bets_all if b.get("status"] != "Oczekujący"]
 
     if not settled_all:
         st.warning("⚠️ Brak rozliczonych zakładów w bazie Supabase.")
@@ -988,20 +1000,24 @@ with tab4:
         df_full['is_won'] = df_full['status'].apply(lambda x: 1 if x == "Wygrany" else 0)
 
         st.markdown("### 🏆 Ranking Niezawodności Drużyn (Team Reliability Index)")
-        st.caption("Dokładne zestawienie dla każdej drużyny występującej w Twoich typach: liczba zakładów, trafienia, skuteczność.")
+        st.caption("Dokładne zestawienie wyłącznie dla autentycznych drużyn koszykarskich (z wykluczeniem linii over/under):")
 
         team_perf = {}
+        valid_teams_set = set(teams_dict.keys())
+
         for _, row in df_full.iterrows():
             pick = str(row.get('pick', ''))
-            team_name = pick.split("(")[0].strip()
+            team_candidate = pick.split("(")[0].strip()
             
-            if team_name not in team_perf:
-                team_perf[team_name] = {"total": 0, "wins": 0, "odds_sum": 0.0}
+            # Filtrowanie: bierzemy pod uwagę tylko prawdziwe drużyny NBA, odrzucając linie punktowe
+            is_valid_team = any(t.lower() in team_candidate.lower() or team_candidate.lower() in t.lower() for t in valid_teams_set)
             
-            team_perf[team_name]["total"] += 1
-            if row['is_won'] == 1:
-                team_perf[team_name]["wins"] += 1
-                team_perf[team_name]["odds_sum"] += row['odds_float']
+            if is_valid_team and not ("Over" in pick or "Under" in pick or "pkt" in pick):
+                if team_candidate not in team_perf:
+                    team_perf[team_candidate] = {"total": 0, "wins": 0}
+                team_perf[team_candidate]["total"] += 1
+                if row['is_won'] == 1:
+                    team_perf[team_candidate]["wins"] += 1
 
         team_rows = []
         for t_name, data in team_perf.items():
@@ -1017,8 +1033,11 @@ with tab4:
                 "Skuteczność (%)": round(wr, 1)
             })
 
-        df_teams_rank = pd.DataFrame(team_rows).sort_values(by=["Skuteczność (%)", "Liczba typów"], ascending=[False, False]).reset_index(drop=True)
-        st.dataframe(df_teams_rank, use_container_width=True, hide_index=True)
+        if team_rows:
+            df_teams_rank = pd.DataFrame(team_rows).sort_values(by=["Skuteczność (%)", "Liczba typów"], ascending=[False, False]).reset_index(drop=True)
+            st.dataframe(df_teams_rank, use_container_width=True, hide_index=True)
+        else:
+            st.info("Brak rozliczonych typów bezpośrednio na drużyny (w bazie dominują rynki sum/spreadów).")
 
         st.markdown("---")
         st.subheader("🎯 Dokładna Analiza Typów i Kontekstów (Dom vs Wyjazd)")
