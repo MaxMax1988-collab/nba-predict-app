@@ -438,7 +438,7 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- INTELIGENTNE KOREKTY ANALITYCZNE (B2B + BEHAWIOR) ---
+# --- INTELIGENTNE KOREKTY ANALITYCZNE & MATCHUP ARCHETYPES (Z AUTOMATYCZNĄ KOREKTĄ WYNIKU) ---
 def get_user_team_modifier(team_name):
     try:
         bets = load_bets()
@@ -475,12 +475,38 @@ def predict_matchup_advanced(home_team, away_team, home_injury_adj=0.0, away_inj
     a_off = max(80.0, away_team.get("AVG_PTS_FOR") - away_injury_adj - b2b_away_penalty)
     a_def = away_team.get("AVG_PTS_AGAINST")
 
-    net_diff = home_team.get("NET_RATING") - away_team.get("NET_RATING")
+    # Automatyczne korekty taktyczne oparte o archetyp matchupu
+    h_for_raw = home_team.get("AVG_PTS_FOR", 112.0)
+    h_ag_raw = home_team.get("AVG_PTS_AGAINST", 112.0)
+    a_for_raw = away_team.get("AVG_PTS_FOR", 112.0)
+    a_ag_raw = away_team.get("AVG_PTS_AGAINST", 112.0)
+
+    tactical_delta_home = 0.0
+    tactical_delta_away = 0.0
+
+    # Archetyp 1: Shootout (Szybkie Strzelanie) -> Obie ekipy ultra-ofensywne
+    if h_for_raw >= 115.0 and a_for_raw >= 115.0 and (h_ag_raw >= 112.0 or a_ag_raw >= 112.0):
+        tactical_delta_home += 1.0
+        tactical_delta_away += 1.0
+    # Archetyp 2: Wojna w Okopach (Defensive Battle) -> Obie ekipy defensywne
+    elif h_ag_raw <= 108.0 and a_ag_raw <= 108.0:
+        tactical_delta_home -= 1.0
+        tactical_delta_away -= 1.0
+
+    # Archetyp 3: Ukryty Gigant (Net Rating Correction)
+    h_net = home_team.get("NET_RATING", 0.0)
+    a_net = away_team.get("NET_RATING", 0.0)
+    if home_team.get("W", 0) < home_team.get("L", 0) and h_net > 2.0:
+        tactical_delta_home += 0.8
+    if away_team.get("W", 0) < away_team.get("L", 0) and a_net > 2.0:
+        tactical_delta_away += 0.8
+
+    net_diff = h_net - a_net
     power_diff = home_team.get("TOTAL_POWER") - away_team.get("TOTAL_POWER")
     home_advantage = 3.0
 
-    expected_home_pts = (h_off + a_def) / 2 + (net_diff / 5) + (power_diff / 3) + (home_advantage / 2)
-    expected_away_pts = (a_off + h_def) / 2 - (net_diff / 5) - (power_diff / 3) - (home_advantage / 2)
+    expected_home_pts = (h_off + a_def) / 2 + (net_diff / 5) + (power_diff / 3) + (home_advantage / 2) + tactical_delta_home
+    expected_away_pts = (a_off + h_def) / 2 - (net_diff / 5) - (power_diff / 3) - (home_advantage / 2) + tactical_delta_away
 
     expected_diff = expected_home_pts - expected_away_pts
     base_prob_home = 1 / (1 + 10 ** (-expected_diff / 16.0))
@@ -501,6 +527,44 @@ def predict_matchup_advanced(home_team, away_team, home_injury_adj=0.0, away_inj
         "expected_diff": expected_diff,
     }
 
+def analyze_matchup_archetype(home_team, away_team):
+    """Analizuje style obu drużyn na podstawie statystyk tabeli ligowej i zwraca archetyp taktyczny."""
+    h_for = home_team.get("AVG_PTS_FOR", 112.0)
+    h_ag = home_team.get("AVG_PTS_AGAINST", 112.0)
+    a_for = away_team.get("AVG_PTS_FOR", 112.0)
+    a_ag = away_team.get("AVG_PTS_AGAINST", 112.0)
+    
+    tags = []
+    
+    if h_for >= 115.0 and a_for >= 115.0 and (h_ag >= 112.0 or a_ag >= 112.0):
+        tags.append("⚡ **SHOOTOUT (Szybkie Strzelanie - Automatyczna korekta +2.0 pkt):** Obie drużyny generują potężną ofensywę. Wysoki potencjał na OVER.")
+    elif h_ag <= 108.0 and a_ag <= 108.0:
+        tags.append("🛡️ **WOJNA W OKOPACH (Defensive Battle - Automatyczna korekta -2.0 pkt):** Spotkanie dwóch szczelnych defensyw (kandydat na UNDER).")
+    elif (h_for >= 116.0 and h_ag <= 108.0) or (a_for >= 116.0 and h_ag <= 108.0):
+        tags.append("⚔️ **ZDERZENIE ŻYWIOŁÓW:** Elitarna defensywa zderza się z ultra-ofensywą. Kluczem będzie skuteczność rzutów za 3.")
+    else:
+        tags.append("⚖️ **POJEDYNEK ZBALANSOWANY:** Standardowy profil matchupu ligowego.")
+        
+    h_net = home_team.get("NET_RATING", 0.0)
+    a_net = away_team.get("NET_RATING", 0.0)
+    h_wins = home_team.get("W", 0)
+    h_losses = home_team.get("L", 0)
+    a_wins = away_team.get("W", 0)
+    a_losses = away_team.get("L", 0)
+    
+    if h_wins < h_losses and h_net > 2.0:
+        tags.append(f"💎 **UKRYTY GIGANT (Automatyczny boost +0.8 pkt dla {home_team.get('TEAM_NAME')}):** Ujemny bilans przy wysokim Net Ratingu ({h_net:+.1f}).")
+    elif a_wins < a_losses and a_net > 2.0:
+        tags.append(f"💎 **UKRYTY GIGANT (Automatyczny boost +0.8 pkt dla {away_team.get('TEAM_NAME')}):** Ujemny bilans przy silnym Net Ratingu ({a_net:+.1f}).")
+
+    h_off_corr = home_team.get("OFF_CORR", 0.0)
+    if h_off_corr < -0.6:
+        tags.append(f"📉 **SPADEK FORMY ATAKU:** {home_team.get('TEAM_NAME')} notuje ostatnio niższą produkcję punktową niż średnia sezonowa.")
+    elif h_off_corr > 0.3:
+        tags.append(f"📈 **ROZPĘDZONA OFENSYWA:** {home_team.get('TEAM_NAME')} jest w wyraźnym gazie strzeleckim.")
+
+    return tags
+
 def analyze_upset_potential(home_team_name, away_team_name, home_inj, away_inj, expected_diff, bookie_h_odds, bookie_a_odds, prob_home, prob_away):
     reasons = []
     is_home_fav = expected_diff > 0
@@ -509,7 +573,6 @@ def analyze_upset_potential(home_team_name, away_team_name, home_inj, away_inj, 
     fav_inj = home_inj if is_home_fav else away_inj
     dog_odds = bookie_a_odds if is_home_fav else bookie_h_odds
     
-    # Obliczamy kurs sprawiedliwy dla underdoga
     dog_prob = prob_away if is_home_fav else prob_home
     fair_dog_odds = 1.0 / dog_prob if dog_prob > 0 else 99.0
     
@@ -518,12 +581,11 @@ def analyze_upset_potential(home_team_name, away_team_name, home_inj, away_inj, 
     if abs(expected_diff) < 5.0:
         reasons.append(f"Bardzo wyrównany mecz na papierze (różnica tylko {abs(expected_diff):.1f} pkt).")
         
-    # WERYFIKACJA +EV: Sprawdzamy czy kurs bukmachera na underdoga daje realne Value względem modelu
     if dog_odds > 0:
         if dog_odds > fair_dog_odds:
             reasons.append(f"Wykryto +EV dla underdoga ({dog_team}): Kurs bukmachera ({dog_odds}) przewyższa sprawiedliwą wycenę modelu ({fair_dog_odds:.2f}).")
         else:
-            reasons.append(f"⚠️ Uwaga: Kurs bukmachera na underdoga ({dog_team}) wynosi {dog_odds}, podczas gdy model wycenia go na {fair_dog_odds:.2f} (brak Value / zaniżony kurs).")
+            reasons.append(f"⚠️ Uwaga: Kurs bukmachera na underdoga ({dog_team}) wynosi {dog_odds}, podczas gdy model wycenia go na {fair_dog_odds:.2f} (brak Value).")
             
     return fav_team, dog_team, reasons, fair_dog_odds
 
@@ -534,7 +596,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (Czysta Matematyka + Detektor Upsetów + Auto-Audyt)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Zautomatyzowane Korekty Taktyczne)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -549,7 +611,7 @@ if st.sidebar.button("🔄 Rozlicz zaległe mecze (The Odds API)"):
     st.sidebar.success("Zakończono rozliczanie!")
     st.rerun()
 
-st.sidebar.success("🟢 System (Czysta Matematyka + Supabase + Auto-Audyt) Aktywny")
+st.sidebar.success("🟢 System (Automatyczne Korekty + Supabase) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -582,7 +644,7 @@ with tab1:
             if manual_home in teams_dict and manual_away in teams_dict:
                 res = predict_matchup_advanced(teams_dict[manual_home], teams_dict[manual_away])
                 st.markdown("---")
-                st.metric("Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
+                st.metric("Skorygowany Przewidywany Wynik", f"{res.get('home_pts')} : {res.get('away_pts')}")
     else:
         match_labels = []
         for m in live_odds_data:
@@ -677,7 +739,6 @@ with tab1:
             res.get('expected_diff'), bookie_h_odds, bookie_a_odds, res.get('prob_home'), res.get('prob_away')
         )
 
-        # Inteligentna blokada: Blokujemy ML faworyta tylko wtedy, gdy szanse faworyta spadną poniżej 60% lub model przewiduje wyrównany pojedynek, a nie automatycznie przy samych suwakach
         is_high_risk = (res.get('prob_home') < 0.60 and res.get('prob_home') > 0.40) and total_injuries > 4.0
 
         if is_high_risk:
@@ -704,6 +765,15 @@ with tab1:
                 "".join([f"• {r}<br>" for r in upset_reasons]) + f"<b>Zalecenie:</b> Zweryfikuj kursy i rozważ handicap dodatni na underdoga ({dog}).</div>",
                 unsafe_allow_html=True
             )
+
+        # --- AUTOMATYCZNE TAGI TAKTYCZNE I PROFIL MATCHUPU ---
+        matchup_tags = analyze_matchup_archetype(teams_dict[matched_home], teams_dict[matched_away])
+        if matchup_tags:
+            st.markdown("<div class='injury-box' style='border-color: #1f6feb;'>", unsafe_allow_html=True)
+            st.subheader("🧬 Profil Taktyczny i Automatyczne Korekty Modelu")
+            for tag in matchup_tags:
+                st.markdown(f"• {tag}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
@@ -948,7 +1018,6 @@ with tab3:
 
             df_chart = pd.DataFrame(chart_data)
 
-            # Pełne dynamiczne mapowanie osi X bez sztywnych limitów obcinających wykres
             line = alt.Chart(df_chart).mark_line(
                 color='#00E676',
                 strokeWidth=3,
@@ -990,7 +1059,7 @@ with tab4:
     st.info("🔬 Pełny wgląd w detale: ranking niezawodności poszczególnych drużyn, skuteczność rynków oraz twarde dane bez uproszczeń.")
     
     bets_all = load_bets()
-    settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
+    settled_all = [b for b in bets_all if b.get("status"] != "Oczekujący"]
 
     if not settled_all:
         st.warning("⚠️ Brak rozliczonych zakładów w bazie Supabase.")
@@ -1009,7 +1078,6 @@ with tab4:
             pick = str(row.get('pick', ''))
             team_candidate = pick.split("(")[0].strip()
             
-            # Filtrowanie: bierzemy pod uwagę tylko prawdziwe drużyny NBA, odrzucając linie punktowe
             is_valid_team = any(t.lower() in team_candidate.lower() or team_candidate.lower() in t.lower() for t in valid_teams_set)
             
             if is_valid_team and not ("Over" in pick or "Under" in pick or "pkt" in pick):
