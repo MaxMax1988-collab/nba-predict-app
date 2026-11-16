@@ -438,7 +438,7 @@ def fetch_live_odds(api_key):
     except Exception:
         return []
 
-# --- INTELIGENTNE KOREKTY ANALITYCZNE & MATCHUP ARCHETYPES (Z AUTOMATYCZNĄ KOREKTĄ WYNIKU) ---
+# --- INTELIGENTNE KOREKTY ANALITYCZNE & MATCHUP ARCHETYPES ---
 def get_user_team_modifier(team_name):
     try:
         bets = load_bets()
@@ -475,7 +475,6 @@ def predict_matchup_advanced(home_team, away_team, home_injury_adj=0.0, away_inj
     a_off = max(80.0, away_team.get("AVG_PTS_FOR") - away_injury_adj - b2b_away_penalty)
     a_def = away_team.get("AVG_PTS_AGAINST")
 
-    # Automatyczne korekty taktyczne oparte o archetyp matchupu
     h_for_raw = home_team.get("AVG_PTS_FOR", 112.0)
     h_ag_raw = home_team.get("AVG_PTS_AGAINST", 112.0)
     a_for_raw = away_team.get("AVG_PTS_FOR", 112.0)
@@ -484,16 +483,16 @@ def predict_matchup_advanced(home_team, away_team, home_injury_adj=0.0, away_inj
     tactical_delta_home = 0.0
     tactical_delta_away = 0.0
 
-    # Archetyp 1: Shootout (Szybkie Strzelanie) -> Obie ekipy ultra-ofensywne
+    # Archetyp 1: Shootout
     if h_for_raw >= 115.0 and a_for_raw >= 115.0 and (h_ag_raw >= 112.0 or a_ag_raw >= 112.0):
         tactical_delta_home += 1.0
         tactical_delta_away += 1.0
-    # Archetyp 2: Wojna w Okopach (Defensive Battle) -> Obie ekipy defensywne
+    # Archetyp 2: Wojna w Okopach
     elif h_ag_raw <= 108.0 and a_ag_raw <= 108.0:
         tactical_delta_home -= 1.0
         tactical_delta_away -= 1.0
 
-    # Archetyp 3: Ukryty Gigant (Net Rating Correction)
+    # Archetyp 3: Ukryty Gigant Net Rating
     h_net = home_team.get("NET_RATING", 0.0)
     a_net = away_team.get("NET_RATING", 0.0)
     if home_team.get("W", 0) < home_team.get("L", 0) and h_net > 2.0:
@@ -528,7 +527,6 @@ def predict_matchup_advanced(home_team, away_team, home_injury_adj=0.0, away_inj
     }
 
 def analyze_matchup_archetype(home_team, away_team):
-    """Analizuje style obu drużyn na podstawie statystyk tabeli ligowej i zwraca archetyp taktyczny."""
     h_for = home_team.get("AVG_PTS_FOR", 112.0)
     h_ag = home_team.get("AVG_PTS_AGAINST", 112.0)
     a_for = away_team.get("AVG_PTS_FOR", 112.0)
@@ -596,7 +594,7 @@ def calculate_kelly_stake(bankroll, probability, odds):
     safe_kelly = max(0.0, kelly_fraction * 0.25)
     return round(bankroll * safe_kelly, 2)
 
-st.title("🏀 Advanced Multi-Factor NBA Predictor (Zautomatyzowane Korekty Taktyczne)")
+st.title("🏀 Advanced Multi-Factor NBA Predictor (Zautomatyzowane Korekty & Realne Linie)")
 
 api_key_input = st.sidebar.text_input(
     "The Odds API Key", value=DEFAULT_API_KEY, type="password"
@@ -611,7 +609,7 @@ if st.sidebar.button("🔄 Rozlicz zaległe mecze (The Odds API)"):
     st.sidebar.success("Zakończono rozliczanie!")
     st.rerun()
 
-st.sidebar.success("🟢 System (Automatyczne Korekty + Supabase) Aktywny")
+st.sidebar.success("🟢 System (Automatyczne Korekty + Realne Linie + Supabase) Aktywny")
 
 teams_dict, season_year = fetch_nba_standings()
 live_odds_data = fetch_live_odds(api_key_input)
@@ -714,7 +712,10 @@ with tab1:
 
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
-        spread_bookie_line, spread_bookie_odds, spread_team = 0.0, 1.9, ""
+        
+        # Pobieranie obu stron prawdziwego spreadu bukmachera (Gospodarz i Gość)
+        home_spread_line, home_spread_odds = None, None
+        away_spread_line, away_spread_odds = None, None
 
         if bookmakers:
             for bookie in bookmakers:
@@ -730,9 +731,13 @@ with tab1:
                         for out in market.get("outcomes", []):
                             out_name = out.get("name")
                             if out_name == raw_home or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_home:
-                                spread_bookie_line = float(out.get("point", 0.0))
-                                spread_bookie_odds = float(out.get("price", 1.9))
-                                spread_team = matched_home
+                                home_spread_line = float(out.get("point", 0.0))
+                                home_spread_odds = float(out.get("price", 1.9))
+                            elif out_name == raw_away or TEAM_NAME_MAPPING.get(out_name, out_name) == matched_away:
+                                away_spread_line = float(out.get("point", 0.0))
+                                away_spread_odds = float(out.get("price", 1.9))
+                if home_spread_line is not None and away_spread_line is not None and bookie_h_odds > 0:
+                    break
 
         fav, dog, upset_reasons, fair_dog = analyze_upset_potential(
             matched_home, matched_away, home_inj_adj, away_inj_adj,
@@ -838,61 +843,63 @@ with tab1:
                     st.rerun()
 
         st.markdown("---")
-        st.subheader("🛡️ Hybrydowy Analizator Bezpiecznych Handicapów (+Spread z Buforem 2.5 pkt)")
-        st.info("💡 Aplikacja automatycznie aplikuje stały bufor bezpieczeństwa (2.5 pkt), aby chronić Twoje kupony przed porażką o włos.")
+        st.subheader("🛡️ Analizator Rzeczywistych Handicapów Bukmacherskich (Model vs Linia Rynkowa)")
 
         raw_diff = res.get("expected_diff")
-        safety_buffer = 2.5
 
-        if raw_diff > 0:
-            recommended_team = matched_home
-            fav_team = matched_home
-            dog_team = matched_away
-            fav_safe_spread = -round((raw_diff - safety_buffer) * 2) / 2
-            dog_safe_spread = round((raw_diff + safety_buffer) * 2) / 2
-        else:
-            recommended_team = matched_away
-            fav_team = matched_away
-            dog_team = matched_home
-            fav_safe_spread = -round((abs(raw_diff) - safety_buffer) * 2) / 2
-            dog_safe_spread = round((abs(raw_diff) + safety_buffer) * 2) / 2
+        if home_spread_line is not None and away_spread_line is not None:
+            # Obliczamy realny Edge (przewagę punktową modelu nad linią bukmachera)
+            # Przykładowo: model daje Bostonowi +20.7 pkt (raw_diff = +20.7), a bukmacher daje linię -8.5.
+            # Zapas bezpieczeństwa (Margin of Safety) = 20.7 + (-8.5) = +12.2 pkt!
+            home_edge = raw_diff + home_spread_line
+            away_edge = -raw_diff + away_spread_line
 
-        st.write(f"• **Przewidywana przewaga modelu:** `{abs(raw_diff):.1f} pkt` dla **{recommended_team}**")
-        st.write(f"• **Sugerowany bezpieczny bufor dla Faworyta ({fav_team}):** `{fav_safe_spread:+.1f}`")
-        st.write(f"• **Sugerowany bezpieczny bufor dla Outsidera ({dog_team}):** **`+{dog_safe_spread}`**")
+            col_sp1, col_sp2 = st.columns(2)
 
-        if spread_bookie_line != 0.0:
-            if spread_team == recommended_team:
-                bookie_team_spread = spread_bookie_line
-            else:
-                bookie_team_spread = -spread_bookie_line
+            with col_sp1:
+                st.markdown(f"**{matched_home} (Gospodarz)**")
+                st.write(f"• Prawdziwa linia bukmachera: **`{home_spread_line:+.1f}`** (Kurs: `{home_spread_odds}`)")
+                st.write(f"• Zapas bezpieczeństwa wg modelu: **`{home_edge:+.1f} pkt`**")
+                
+                if home_edge >= 2.5:
+                    st.success(f"✅ SILNE VALUE (+{home_edge:.1f} pkt zapasu ponad linię bukmachera!)")
+                elif home_edge > 0:
+                    st.info(f"ℹ️ Lekka przewaga modelu (+{home_edge:.1f} pkt zapasu).")
+                else:
+                    st.warning(f"❌ Brak Value na tę linię ({home_edge:.1f} pkt niedoboru wg modelu).")
 
-            st.write(f"• **Aktualna linia bukmachera dla {recommended_team}:** `{bookie_team_spread:+.1f}` (Kurs: `{spread_bookie_odds}`)")
-            
-            col_h_sp1, col_h_sp2 = st.columns(2)
-            
-            with col_h_sp1:
-                fav_label = f"{fav_team} ({fav_safe_spread:+.1f})"
-                if st.button(f"➕ Zapisz Faworyta: {fav_label}", key="save_fav_spread"):
+                h_spread_label = f"{matched_home} ({home_spread_line:+.1f})"
+                if st.button(f"➕ Zapisz: {h_spread_label} @ {home_spread_odds}", key="save_home_real_spread"):
                     save_bet(
-                        datetime.now().strftime("%Y-%m-%d"), 
-                        f"{matched_away} @ {matched_home}", 
-                        fav_label, 
-                        spread_bookie_odds
+                        datetime.now().strftime("%Y-%m-%d"),
+                        f"{matched_away} @ {matched_home}",
+                        h_spread_label,
+                        home_spread_odds
                     )
-                    st.success(f"Zapisano handicap faworyta: {fav_label}")
+                    st.success(f"Zapisano autentyczny handicap: {h_spread_label}")
                     st.rerun()
 
-            with col_h_sp2:
-                dog_label = f"{dog_team} (+{dog_safe_spread})"
-                if st.button(f"➕ Zapisz Outsidera: {dog_label}", key="save_dog_spread"):
+            with col_sp2:
+                st.markdown(f"**{matched_away} (Gość)**")
+                st.write(f"• Prawdziwa linia bukmachera: **`{away_spread_line:+.1f}`** (Kurs: `{away_spread_odds}`)")
+                st.write(f"• Zapas bezpieczeństwa wg modelu: **`{away_edge:+.1f} pkt`**")
+                
+                if away_edge >= 2.5:
+                    st.success(f"✅ SILNE VALUE (+{away_edge:.1f} pkt zapasu ponad linię bukmachera!)")
+                elif away_edge > 0:
+                    st.info(f"ℹ️ Lekka przewaga modelu (+{away_edge:.1f} pkt zapasu).")
+                else:
+                    st.warning(f"❌ Brak Value na tę linię ({away_edge:.1f} pkt niedoboru wg modelu).")
+
+                a_spread_label = f"{matched_away} ({away_spread_line:+.1f})"
+                if st.button(f"➕ Zapisz: {a_spread_label} @ {away_spread_odds}", key="save_away_real_spread"):
                     save_bet(
-                        datetime.now().strftime("%Y-%m-%d"), 
-                        f"{matched_away} @ {matched_home}", 
-                        dog_label, 
-                        spread_bookie_odds
+                        datetime.now().strftime("%Y-%m-%d"),
+                        f"{matched_away} @ {matched_home}",
+                        a_spread_label,
+                        away_spread_odds
                     )
-                    st.success(f"Zapisano bezpieczny handicap outsidera: {dog_label}")
+                    st.success(f"Zapisano autentyczny handicap: {a_spread_label}")
                     st.rerun()
         else:
             st.info("Brak dostępnych rynków Spread (Handicap) u bukmachera dla tego meczu.")
