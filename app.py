@@ -619,11 +619,12 @@ try:
 except Exception:
     pass
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🏀 Terminarz & Value Bets",
     "📊 Tabela Ligi & Korekty",
     "🎯 Terminal Analityczny & ROI",
     "🧠 Granularny Profiler Drużyn i Rynków",
+    "📅 Audyt Kolejki",
 ])
 
 with tab1:
@@ -713,7 +714,6 @@ with tab1:
         bookmakers = match_info.get("bookmakers", [])
         bookie_h_odds, bookie_a_odds = 0.0, 0.0
         
-        # Pobieranie obu stron prawdziwego spreadu bukmachera (Gospodarz i Gość)
         home_spread_line, home_spread_odds = None, None
         away_spread_line, away_spread_odds = None, None
 
@@ -771,7 +771,6 @@ with tab1:
                 unsafe_allow_html=True
             )
 
-        # --- AUTOMATYCZNE TAGI TAKTYCZNE I PROFIL MATCHUPU ---
         matchup_tags = analyze_matchup_archetype(teams_dict[matched_home], teams_dict[matched_away])
         if matchup_tags:
             st.markdown("<div class='injury-box' style='border-color: #1f6feb;'>", unsafe_allow_html=True)
@@ -848,9 +847,6 @@ with tab1:
         raw_diff = res.get("expected_diff")
 
         if home_spread_line is not None and away_spread_line is not None:
-            # Obliczamy realny Edge (przewagę punktową modelu nad linią bukmachera)
-            # Przykładowo: model daje Bostonowi +20.7 pkt (raw_diff = +20.7), a bukmacher daje linię -8.5.
-            # Zapas bezpieczeństwa (Margin of Safety) = 20.7 + (-8.5) = +12.2 pkt!
             home_edge = raw_diff + home_spread_line
             away_edge = -raw_diff + away_spread_line
 
@@ -1066,7 +1062,7 @@ with tab4:
     st.info("🔬 Pełny wgląd w detale: ranking niezawodności poszczególnych drużyn, skuteczność rynków oraz twarde dane bez uproszczeń.")
     
     bets_all = load_bets()
-    settled_all = [b for b in bets_all if b.get("status") != "Oczekujący"]
+    settled_all = [b for b in bets_all if b.get("status"] != "Oczekujący"]
 
     if not settled_all:
         st.warning("⚠️ Brak rozliczonych zakładów w bazie Supabase.")
@@ -1201,3 +1197,174 @@ with tab4:
         )
 
         st.altair_chart(line_micro, use_container_width=True)
+
+with tab5:
+    st.subheader("📅 Audyt Kolejki (Matchday & Gameweek Analytics)")
+    st.info("🔬 Szczegółowe podsumowanie i rozliczenie wybranej nocy meczowej (kolejki) w czasie rzeczywistym.")
+
+    bets_all_tab5 = load_bets()
+    if not bets_all_tab5:
+        st.warning("⚠️ Brak zapisanych typów w bazie Supabase do audytu kolejki.")
+    else:
+        df_tab5 = pd.DataFrame(bets_all_tab5)
+        if 'date' in df_tab5.columns and not df_tab5['date'].dropna().empty:
+            available_dates = sorted(df_tab5['date'].unique(), reverse=True)
+            selected_date = st.selectbox("Wybierz datę kolejki (dzień meczowy):", available_dates, key="select_gameweek_date")
+
+            df_gw = df_tab5[df_tab5['date'] == selected_date]
+            
+            gw_total = len(df_gw)
+            gw_settled = len(df_gw[df_gw['status'] != "Oczekujący"])
+            gw_pending = gw_total - gw_settled
+            gw_won = len(df_gw[df_gw['status'] == "Wygrany"])
+            gw_lost = len(df_gw[df_gw['status'] == "Przegrany"])
+            
+            gw_win_rate = (gw_won / gw_settled * 100) if gw_settled > 0 else 0.0
+            
+            gw_staked = gw_settled * 10.0
+            gw_returns = sum([float(b.get('odds', 1.9)) * 10.0 for b in df_gw.to_dict('records') if b.get('status') == "Wygrany"])
+            gw_profit = gw_returns - gw_staked
+            gw_roi = (gw_profit / gw_staked * 100) if gw_staked > 0 else 0.0
+
+            st.markdown(f"### 📊 Podsumowanie Kolejki: `{selected_date}`")
+            st.caption(f"Status rozliczenia: Rozliczono **{gw_settled}/{gw_total}** zakładów (Oczekujące: {gw_pending})")
+
+            col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+            with col_g1:
+                badge_gw_win = "metric-badge-green" if gw_win_rate >= 50.0 else "metric-badge-red"
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Skuteczność Kolejki</div>
+                    <div class="metric-value">{gw_win_rate:.1f}%</div>
+                    <div class="{badge_gw_win}">↑ {gw_won}/{gw_settled} trafione</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_g2:
+                badge_gw_prof = "metric-badge-green" if gw_profit >= 0 else "metric-badge-red"
+                sign_gw = "+" if gw_profit >= 0 else ""
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Zysk / Strata Kolejki</div>
+                    <div class="metric-value">{sign_gw}{gw_profit:.2f} PLN</div>
+                    <div class="{badge_gw_prof}">↑ {sign_gw}{gw_profit:.2f} PLN</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_g3:
+                badge_gw_roi = "metric-badge-green" if gw_roi >= 0 else "metric-badge-red"
+                sign_gw_roi = "+" if gw_roi >= 0 else ""
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">ROI Kolejki</div>
+                    <div class="metric-value">{sign_gw_roi}{gw_roi:.2f}%</div>
+                    <div class="{badge_gw_roi}">↑ {sign_gw_roi}{gw_roi:.2f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_g4:
+                avg_gw_odds = df_gw['odds'].astype(float).mean() if not df_gw.empty else 0.0
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-title">Średni Kurs w Kolejce</div>
+                    <div class="metric-value">{avg_gw_odds:.2f}</div>
+                    <div class="metric-badge-green">Próg EV > 1.40</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.subheader("📈 Przebieg Kapitału w Trakcie Kolejki (Intraday Equity Curve)")
+            
+            gw_settled_sorted = sorted([b for b in df_gw.to_dict('records') if b.get('status') != "Oczekujący"], key=lambda x: x.get('id', 0))
+            if not gw_settled_sorted:
+                st.info("Brak rozliczonych meczów w tej kolejce do narysowania wykresu liniowego.")
+            else:
+                gw_chart_data = [{"Krok": 0, "Kapitał Kolejki (PLN)": float(bankroll), "Mecz": "Start Kolejki"}]
+                curr_cap_gw = float(bankroll)
+                
+                for idx_c, bet_c in enumerate(gw_settled_sorted):
+                    o_val = float(bet_c.get('odds', 1.9))
+                    if bet_c.get('status') == "Wygrany":
+                        curr_cap_gw += (o_val - 1.0) * 10.0
+                    else:
+                        curr_cap_gw -= 10.0
+                    
+                    gw_chart_data.append({
+                        "Krok": idx_c + 1,
+                        "Kapitał Kolejki (PLN)": round(curr_cap_gw, 2),
+                        "Mecz": bet_c.get('match', 'Mecz')
+                    })
+                
+                df_gw_chart = pd.DataFrame(gw_chart_data)
+                
+                line_gw = alt.Chart(df_gw_chart).mark_line(
+                    color='#00E676',
+                    strokeWidth=3,
+                    interpolate='monotone'
+                ).encode(
+                    x=alt.X('Krok:Q', title='Kolejne rozliczone typy w nocy', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
+                    y=alt.Y('Kapitał Kolejki (PLN):Q', scale=alt.Scale(zero=False), title='Kapitał (PLN)', axis=alt.Axis(grid=True, gridColor='#21262d', titleColor='#8b949e')),
+                    tooltip=['Krok', 'Mecz', 'Kapitał Kolejki (PLN)']
+                )
+                points_gw = alt.Chart(df_gw_chart).mark_circle(color='#00E676', size=60).encode(
+                    x='Krok:Q',
+                    y='Kapitał Kolejki (PLN):Q',
+                    tooltip=['Krok', 'Mecz', 'Kapitał Kolejki (PLN)']
+                )
+                st.altair_chart((line_gw + points_gw).properties(height=320).configure_view(strokeWidth=0, fill='#0d1117'), use_container_width=True)
+
+            st.markdown("---")
+            st.subheader("📋 Szczegółowa Tabela Meczów & Margines Błędu (Post-Mortem)")
+            
+            detailed_audit_rows = []
+            for b_item in df_gw.to_dict('records'):
+                m_name = b_item.get('match', '')
+                p_pick = b_item.get('pick', '')
+                s_stat = b_item.get('status', '')
+                sc_str = b_item.get('score', '')
+                
+                margin_desc = "Brak wyniku"
+                if sc_str and ":" in sc_str:
+                    try:
+                        parts_sc = sc_str.split(":")
+                        a_sc = float(parts_sc[0])
+                        h_sc = float(parts_sc[1])
+                        
+                        if "(" in p_pick and ")" in p_pick:
+                            team_p = p_pick.split("(")[0].strip()
+                            spr_val = float(p_pick.split("(")[1].replace(")", ""))
+                            
+                            # Sprawdzamy czy to gospodarz czy gość
+                            if "@" in m_name:
+                                h_team_full = m_name.split(" @ ")[1].strip()
+                                is_h_bet = h_team_full.lower() in team_p.lower() or team_p.lower() in h_team_full.lower()
+                            else:
+                                is_h_bet = True
+                                
+                            if is_h_bet:
+                                cover_res = (h_sc + spr_val) - a_sc
+                            else:
+                                cover_res = (a_sc + spr_val) - h_sc
+                                
+                            margin_desc = f"{cover_res:+.1f} pkt zapasu"
+                        else:
+                            if "@" in m_name:
+                                h_team_full = m_name.split(" @ ")[1].strip()
+                                is_h_bet = h_team_full.lower() in p_pick.lower() or p_pick.lower() in h_team_full.lower()
+                            else:
+                                is_h_bet = True
+                                
+                            diff_pts = (h_sc - a_sc) if is_h_bet else (a_sc - h_sc)
+                            margin_desc = f"Różnica: {diff_pts:+.0f} pkt"
+                    except:
+                        margin_desc = "Błąd parsowania"
+
+                detailed_audit_rows.append({
+                    "Mecz": m_name,
+                    "Wybrany Typ": p_pick,
+                    "Kurs": b_item.get('odds'),
+                    "Wynik (Gość:Gospodarz)": sc_str if sc_str else "Trwa / Brak",
+                    "Margines / Pokrycie": margin_desc,
+                    "Status": s_stat
+                })
+                
+            st.dataframe(pd.DataFrame(detailed_audit_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("Brak przypisanych dat do typów w bazie.")
